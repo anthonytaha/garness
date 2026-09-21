@@ -1,37 +1,37 @@
 package model
 
 type LLMResponse struct {
-	CONTENT       string         `json:"content"`
-	REASONING     *string        `json:"reasoning,omitempty"`
-	TOOL_CALLS    []any          `json:"tool_calls"`
-	USAGE         map[string]any `json:"usage"`
-	FINISH_REASON *string        `json:"reasoning,omitempty"`
-	RAW           map[string]any `json:"raw"`
+	Content      string         `json:"content"`
+	Reasoning    *string        `json:"reasoning,omitempty"`
+	ToolCalls    []any          `json:"tool_calls"`
+	Usage        map[string]any `json:"usage"`
+	FinishReason *string        `json:"reasoning,omitempty"`
+	Raw          map[string]any `json:"raw"`
 }
 
 func NewLLMResponse(content string) *LLMResponse {
 	return &LLMResponse{
-		CONTENT:    content,
-		TOOL_CALLS: []any{},
-		USAGE:      map[string]any{},
-		RAW:        map[string]any{},
+		Content:   content,
+		ToolCalls: []any{},
+		Usage:     map[string]any{},
+		Raw:       map[string]any{},
 	}
 }
 
 type Provider struct {
-	BASE_URL string `json:"base_url"`
-	MODEL    string `json:"model"`
-	API_KEY  string
+	BaseUrl string `json:"base_url"`
+	Model   string `json:"model"`
+	ApiKey  string
 }
 
 func NewProvider(baseUrl string, model string, apiKey string) *Provider {
 	return &Provider{
-		BASE_URL: baseUrl,
-		MODEL:    model,
-		API_KEY:  apiKey,
+		BaseUrl: baseUrl,
+		Model:   model,
+		ApiKey:  apiKey,
 	}
 }
 
-func NewOpenRouterProvider(model string, apiKey string) *Provider {
-	return NewProvider("https://openrouter.ai/api/v1", model, apiKey)
+func NewGeminiProvider(model string, apiKey string) *Provider {
+	return NewProvider("https://generativelanguage.googleapis.com/v1beta/openai", model, apiKey)
 }
