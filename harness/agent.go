@@ -9,6 +9,7 @@ import (
 )
 
 const DEFAULT_SYS_PROMPT string = "You are Garness, a coding agent"
+const MAX_TOOL_STEPS int = 6
 
 type Agent struct {
 	Model        string
@@ -58,6 +59,10 @@ func NewAgent(modelName string, provider model.Provider, systemPrompt string, ag
 }
 
 func (a *Agent) Send(userText string) (string, error) {
+	context := Deliver(userText)
+	if context != "" {
+		a.Messages = append(a.Messages, map[string]any{"role": "user", "content": context})
+	}
 	a.Messages = append(a.Messages, map[string]any{"role": "user", "content": userText})
 	options := &model.CompleteOptions{
 		Model: a.Model,
