@@ -37,8 +37,9 @@ func loadEnvFile(path string) {
 
 func main() {
 	loadEnvFile(".env")
-	agent := harness.NewAgent("", *model.NewGeminiProvider("gemini-3.5-flash", os.Getenv("GOOGLE_AI_STUDIO_KEY")))
+	agent := harness.NewAgent("", *model.NewGeminiProvider("gemini-3.6-flash", os.Getenv("GOOGLE_AI_STUDIO_KEY")), "", ".")
 	fmt.Println("Welcome to Garness:")
+	fmt.Println("System prompt: ", agent.SystemPrompt)
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("you> ")
