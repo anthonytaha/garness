@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -112,18 +111,54 @@ func Calculator(expression string) (string, error) {
 	return strconv.FormatFloat(result, 'g', -1, 64), nil
 }
 
-func ReadFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Sprintf("error: no such file: %s", path)
-		}
-		return fmt.Sprintf("error: %v", err)
+func ReadFileTool(ws *Workspace) Tool {
+	return Tool{
+		Name:        "read_file",
+		Description: "Read a UTF-8 text file from the workspace.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string"},
+			},
+			"required": []string{"path"},
+		},
+		Func: func(args map[string]any) (string, error) {
+			path, ok := args["path"].(string)
+			if !ok {
+				return "", fmt.Errorf("path must be a string")
+			}
+			return ws.Read(path), nil // ← sandboxed, not the raw ReadFile
+		},
 	}
-
-	return string(data)
 }
 
+func WriteFileTool(ws *Workspace) Tool {
+	return Tool{
+		Name:        "write_file",
+		Description: "Write UTF-8 text to a file in the workspace, creating or overwriting it.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string"},
+			},
+			"required": []string{"path", "content"},
+		},
+		Func: func(args map[string]any) (string, error) {
+			path, ok := args["path"].(string)
+			if !ok {
+				return "", fmt.Errorf("path must be a string")
+			}
+			content, ok := args["content"].(string)
+			if !ok {
+				return "", fmt.Errorf("content must be a string")
+			}
+			return ws.Write(path, content), nil
+		},
+	}
+}
+
+// Workspace Agnostic tools
 func DefaultTools() *ToolRegistry {
 	reg := NewToolRegistry()
 
@@ -148,28 +183,6 @@ func DefaultTools() *ToolRegistry {
 			return Calculator(expression)
 		},
 	})
-
-	reg.Register(Tool{
-		Name:        "read_file",
-		Description: "Read a UTF-8 text file from disk and return its contents.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"path": map[string]any{
-					"type": "string",
-				},
-			},
-			"required": []string{"path"},
-		},
-		Func: func(args map[string]any) (string, error) {
-			path, ok := args["path"].(string)
-			if !ok {
-				return "", fmt.Errorf("path must be a string")
-			}
-			return ReadFile(path), nil
-		},
-	})
-
 	return reg
 }
 

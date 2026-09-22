@@ -13,7 +13,7 @@ type Workspace struct {
 }
 
 // New creates a workspace. An empty root creates a fresh temporary directory.
-func New(root string) (*Workspace, error) {
+func NewWorkspace(root string) (*Workspace, error) {
 	var err error
 
 	if root == "" {

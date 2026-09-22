@@ -18,6 +18,7 @@ type Agent struct {
 	SystemPrompt string
 	AgentsDir    string
 	Tools        *ToolRegistry
+	Workspace    *Workspace
 }
 
 func loadAgentsMD(dir string) (string, error) {
