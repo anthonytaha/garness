@@ -1,4 +1,4 @@
-package tools
+package harness
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ type Tool struct {
 	Name        string
 	Description string
 	Func        ToolFunc
-	Parameters  map[string]string
+	Parameters  map[string]any
 }
 
 type ToolRegistry struct {
@@ -29,7 +29,7 @@ func NewToolRegistry() *ToolRegistry {
 	}
 }
 
-func (tr *ToolRegistry) RegisterTool(tool Tool) {
+func (tr *ToolRegistry) Register(tool Tool) {
 	tr.tools[tool.Name] = tool
 }
 

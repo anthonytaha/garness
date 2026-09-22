@@ -4,6 +4,7 @@ It currently featues:
 - OpenAI Chat complete compatibility.
 - Simple message memory
 - Agent system prompts
+- Basic Tool system
 
 # Why?
 - To better understand how tools like claude code, codex, Pi work.
