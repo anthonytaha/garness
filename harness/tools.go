@@ -12,10 +12,11 @@ import (
 type ToolFunc func(args map[string]any) (string, error)
 
 type Tool struct {
-	Name        string
-	Description string
-	Func        ToolFunc
-	Parameters  map[string]any
+	Name          string
+	Description   string
+	Func          ToolFunc
+	Parameters    map[string]any
+	NeedsApproval bool
 }
 
 type ToolRegistry struct {
@@ -127,8 +128,9 @@ func ReadFileTool(ws *Workspace) Tool {
 			if !ok {
 				return "", fmt.Errorf("path must be a string")
 			}
-			return ws.Read(path), nil // ← sandboxed, not the raw ReadFile
+			return ws.Read(path), nil // sandboxed, not the raw ReadFile
 		},
+		NeedsApproval: true,
 	}
 }
 
@@ -155,6 +157,7 @@ func WriteFileTool(ws *Workspace) Tool {
 			}
 			return ws.Write(path, content), nil
 		},
+		NeedsApproval: true,
 	}
 }
 

@@ -1,10 +1,12 @@
 # About the project
 Garness is a lightweight agent harness written in Go.
 It currently featues:
-- OpenAI Chat complete compatibility.
+- OpenAI Chat complete compatibility
 - Simple message memory
 - Agent system prompts
 - Basic Tool system
+- Workspaces
+- Basic Tool Approval
 
 # Why?
 - To better understand how tools like claude code, codex, Pi work.

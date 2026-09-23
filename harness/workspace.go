@@ -149,7 +149,7 @@ func (ws *Workspace) Read(path string) string {
 	return string(body)
 }
 
-func (ws *Workspace) Edit(path, old, new string) string {
+func (ws *Workspace) Edit(path, oldData, newData string) string {
 	resolved, err := ws.safe(path)
 	if err != nil {
 		return "error: " + err.Error()
@@ -166,12 +166,12 @@ func (ws *Workspace) Edit(path, old, new string) string {
 	}
 
 	text := string(body)
-	if !strings.Contains(text, old) {
+	if !strings.Contains(text, oldData) {
 		return fmt.Sprintf("error: text to replace not found in %s", path)
 	}
 
 	// The final argument limits replacement to the first occurrence.
-	edited := strings.Replace(text, old, new, 1)
+	edited := strings.Replace(text, oldData, newData, 1)
 
 	if err := os.WriteFile(resolved, []byte(edited), info.Mode().Perm()); err != nil {
 		return fmt.Sprintf("error: edit %s: %v", path, err)

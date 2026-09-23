@@ -10,14 +10,13 @@ import (
 	"anthonytaha/garness/model"
 )
 
-func loadEnvFile(path string) {
+func loadEnvFile(scanner *bufio.Scanner, path string) {
 	file, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -36,8 +35,18 @@ func loadEnvFile(path string) {
 }
 
 func main() {
-	loadEnvFile(".env")
+	scanner := bufio.NewScanner(os.Stdin)
+	loadEnvFile(scanner, ".env")
+
 	agent := harness.NewAgent("", *model.NewGeminiProvider("gemini-3.6-flash", os.Getenv("GOOGLE_AI_STUDIO_KEY")), "", ".")
+	agent.Approve = func(name string, arguments string) bool {
+		fmt.Printf("  approve %s(%s)? [y/N] ", name, arguments)
+		if !scanner.Scan() {
+			return false
+		}
+		answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		return answer == "y" || answer == "yes"
+	}
 
 	ws, err := harness.NewWorkspace(".")
 	if err != nil {
@@ -46,8 +55,9 @@ func main() {
 		agent.Tools.Register(harness.ReadFileTool(ws))
 		agent.Tools.Register(harness.WriteFileTool(ws))
 	}
+
 	fmt.Println("Welcome to Garness:")
-	scanner := bufio.NewScanner(os.Stdin)
+
 	for {
 		fmt.Print("you> ")
 		if !scanner.Scan() {

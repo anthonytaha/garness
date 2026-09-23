@@ -19,6 +19,14 @@ type Agent struct {
 	AgentsDir    string
 	Tools        *ToolRegistry
 	Workspace    *Workspace
+	Approve      func(name, arguments string) bool
+}
+
+func (a *Agent) requestApproval(name, arguments string) bool {
+	if a.Approve == nil {
+		return false
+	}
+	return a.Approve(name, arguments)
 }
 
 func loadAgentsMD(dir string) (string, error) {
@@ -114,7 +122,13 @@ func (a *Agent) runToolCalls(resp *model.LLMResponse) {
 		name, _ := fn["name"].(string)
 		arguments, _ := fn["arguments"].(string)
 
-		result := a.Tools.Call(name, arguments)
+		tool, _ := a.Tools.GetTool(name)
+		var result string
+		if tool.NeedsApproval && !a.requestApproval(name, arguments) {
+			result = "[tool ()" + name + ") access denied]"
+		} else {
+			result = a.Tools.Call(name, arguments)
+		}
 
 		a.Messages = append(a.Messages, map[string]any{
 			"role":         "tool",
