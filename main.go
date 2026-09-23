@@ -10,13 +10,14 @@ import (
 	"anthonytaha/garness/model"
 )
 
-func loadEnvFile(scanner *bufio.Scanner, path string) {
+func loadEnvFile(path string) {
 	file, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer file.Close()
 
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -35,8 +36,9 @@ func loadEnvFile(scanner *bufio.Scanner, path string) {
 }
 
 func main() {
+	loadEnvFile(".env")
+
 	scanner := bufio.NewScanner(os.Stdin)
-	loadEnvFile(scanner, ".env")
 
 	agent := harness.NewAgent("", *model.NewGeminiProvider("gemini-3.6-flash", os.Getenv("GOOGLE_AI_STUDIO_KEY")), "", ".")
 	agent.Approve = func(name string, arguments string) bool {
