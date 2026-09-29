@@ -20,6 +20,12 @@ type Agent struct {
 	Tools        *ToolRegistry
 	Workspace    *Workspace
 	Approve      func(name, arguments string) bool
+
+	SummaryModel string
+	ContextBudget int
+
+	usageTokens   int
+	usageMsgCount int
 }
 
 func (a *Agent) requestApproval(name, arguments string) bool {
@@ -57,7 +63,7 @@ func (a *Agent) systemText() (string, error) {
 	return strings.Join(parts, "\n\n"), nil
 }
 func NewAgent(modelName string, provider model.Provider, systemPrompt string, agentsDir string) *Agent {
-	agent := &Agent{Model: modelName, Provider: provider, Messages: []map[string]any{}, AgentsDir: agentsDir}
+	agent := &Agent{Model: modelName, Provider: provider, Messages: []map[string]any{}, AgentsDir: agentsDir, ContextBudget: DEFAULT_CONTEXT_BUDGET}
 	sysPrompt, err := agent.systemText()
 	if err != nil {
 		fmt.Println("WARNING: Error loading system prompt: ", err)
@@ -85,6 +91,8 @@ func (a *Agent) Run(userText string) (string, error) {
 		Tools: tools,
 	}
 	for range MAX_TOOL_STEPS {
+		a.maybeCompact()
+		sent := len(a.Messages)
 		resp, err := model.Chat(
 			a.Provider,
 			a.Messages,
@@ -93,7 +101,9 @@ func (a *Agent) Run(userText string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		a.recordUsage(resp.Usage, sent)
 		if len(resp.ToolCalls) == 0 {
+			a.Messages = append(a.Messages, map[string]any{"role": "assistant", "content": resp.Content})
 			return resp.Content, nil
 		}
 		a.runToolCalls(resp)
@@ -102,8 +112,40 @@ func (a *Agent) Run(userText string) (string, error) {
 
 }
 
-// runToolCalls appends the assistant's tool-call message, executes each call
-// against the registry, and appends a tool result message per call.
+func (a *Agent) maybeCompact() {
+	if a.ContextBudget <= 0 || a.estimatedTokens() <= a.ContextBudget {
+		return
+	}
+	summaryModel := a.SummaryModel
+	if summaryModel == "" {
+		summaryModel = a.Model
+	}
+	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL)
+	if err != nil {
+		fmt.Println("WARNING: compaction failed: ", err)
+		return
+	}
+	a.Messages = compacted
+	a.usageTokens, a.usageMsgCount = 0, 0
+}
+
+func (a *Agent) estimatedTokens() int {
+	if a.usageTokens > 0 && a.usageMsgCount <= len(a.Messages) {
+		return a.usageTokens + estimateTokens(a.Messages[a.usageMsgCount:])
+	}
+	return estimateTokens(a.Messages)
+}
+
+func (a *Agent) recordUsage(usage map[string]any, sent int) {
+	prompt, ok := usage["prompt_tokens"].(float64)
+	if !ok || prompt <= 0 {
+		a.usageTokens, a.usageMsgCount = 0, 0
+		return
+	}
+	a.usageTokens, a.usageMsgCount = int(prompt), sent
+}
+
+
 func (a *Agent) runToolCalls(resp *model.LLMResponse) {
 	a.Messages = append(a.Messages, map[string]any{"role": "assistant", "content": resp.Content, "tool_calls": resp.ToolCalls})
 	for _, call := range resp.ToolCalls {
