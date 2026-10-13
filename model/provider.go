@@ -5,16 +5,17 @@ type LLMResponse struct {
 	Reasoning    *string        `json:"reasoning,omitempty"`
 	ToolCalls    []any          `json:"tool_calls"`
 	Usage        map[string]any `json:"usage"`
-	FinishReason *string        `json:"reasoning,omitempty"`
+	FinishReason *string        `json:"finish_reasoning,omitempty"`
 	Raw          map[string]any `json:"raw"`
 }
 
 func NewLLMResponse(content string) *LLMResponse {
 	return &LLMResponse{
-		Content:   content,
-		ToolCalls: []any{},
-		Usage:     map[string]any{},
-		Raw:       map[string]any{},
+		Content:      content,
+		ToolCalls:    []any{},
+		Usage:        map[string]any{},
+		FinishReason: nil,
+		Raw:          map[string]any{},
 	}
 }
 
@@ -34,4 +35,8 @@ func NewProvider(baseUrl string, model string, apiKey string) *Provider {
 
 func NewGeminiProvider(model string, apiKey string) *Provider {
 	return NewProvider("https://generativelanguage.googleapis.com/v1beta/openai", model, apiKey)
+}
+
+func NewMistralProvider(model string, apiKey string) *Provider {
+	return NewProvider("https://api.mistral.ai/v1", model, apiKey)
 }

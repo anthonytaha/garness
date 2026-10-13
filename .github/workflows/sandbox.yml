@@ -1,0 +1,28 @@
+name: Sandbox tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Linux sandbox helpers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+      - name: Verify sandbox boundaries
+        env:
+          GARNESS_SANDBOX_INTEGRATION: '1'
+        run: go test -race ./...

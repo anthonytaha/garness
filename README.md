@@ -1,5 +1,5 @@
 # About the project
-Garness is a lightweight agent harness written in Go.
+Garness is a lightweight privacy and security first agent harness written in Go.
 It currently featues:
 - OpenAI Chat complete compatibility
 - Simple message memory
@@ -7,6 +7,16 @@ It currently featues:
 - Basic Tool system
 - Workspaces
 - Basic Tool Approval
+- Context Compaction
+- Skills
+- Sandboxing
+- Selectable local and isolated sandbox profiles
+- Sandboxed shell execution on macOS and Linux
+- Per-command approval for network access to exact domains
+- Protected files and confined attachment and skill reads
+- Isolated change review and approved copy-back
+- Command timeouts, bounded output, and filtered environments
+
 
 # Why?
 - To better understand how tools like claude code, codex, Pi work.

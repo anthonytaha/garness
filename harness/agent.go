@@ -2,6 +2,8 @@ package harness
 
 import (
 	"anthonytaha/garness/model"
+	"anthonytaha/garness/sandbox"
+	"anthonytaha/garness/tools"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 )
 
 const DEFAULT_SYS_PROMPT string = "You are Garness, a coding agent"
+
 const MAX_TOOL_STEPS int = 6
 
 type Agent struct {
@@ -17,15 +20,18 @@ type Agent struct {
 	Messages     []map[string]any
 	SystemPrompt string
 	AgentsDir    string
-	Tools        *ToolRegistry
-	Workspace    *Workspace
+	Skills       *SkillRegistry
+	activeSkills map[string]Skill
+	Tools        *tools.ToolRegistry
+	Workspace    *sandbox.Workspace
 	Approve      func(name, arguments string) bool
 
-	SummaryModel string
+	SummaryModel  string
 	ContextBudget int
 
 	usageTokens   int
 	usageMsgCount int
+	usageSystem   string
 }
 
 func (a *Agent) requestApproval(name, arguments string) bool {
@@ -48,6 +54,7 @@ func loadAgentsMD(dir string) (string, error) {
 
 	return strings.TrimSpace(string(data)), nil
 }
+
 func (a *Agent) systemText() (string, error) {
 	agentsMD, err := loadAgentsMD(a.AgentsDir)
 	if err != nil {
@@ -62,21 +69,57 @@ func (a *Agent) systemText() (string, error) {
 	}
 	return strings.Join(parts, "\n\n"), nil
 }
+
 func NewAgent(modelName string, provider model.Provider, systemPrompt string, agentsDir string) *Agent {
-	agent := &Agent{Model: modelName, Provider: provider, Messages: []map[string]any{}, AgentsDir: agentsDir, ContextBudget: DEFAULT_CONTEXT_BUDGET}
+	if systemPrompt == "" {
+		systemPrompt = DEFAULT_SYS_PROMPT
+	}
+	agent := &Agent{SystemPrompt: systemPrompt, Model: modelName, Provider: provider, Messages: []map[string]any{}, AgentsDir: agentsDir, ContextBudget: DEFAULT_CONTEXT_BUDGET}
 	sysPrompt, err := agent.systemText()
 	if err != nil {
 		fmt.Println("WARNING: Error loading system prompt: ", err)
-		sysPrompt = DEFAULT_SYS_PROMPT
+		sysPrompt = systemPrompt
 	}
 	agent.SystemPrompt = sysPrompt
 	agent.Messages = append(agent.Messages, map[string]any{"role": "system", "content": agent.SystemPrompt})
-	agent.Tools = DefaultTools()
+	agent.Tools = tools.DefaultTools()
+	agent.Tools.Approve = agent.requestApproval
+	root := agentsDir
+	if root == "" {
+		root = "."
+	}
+	for _, warning := range agent.ConfigureSkills(filepath.Join(root, ".garness", "skills")) {
+		fmt.Println("WARNING:", warning)
+	}
 	return agent
 }
 
 func (a *Agent) Run(userText string) (string, error) {
-	context := Deliver(userText)
+	// Validate every explicit reference before changing session state.
+	mentions := skillMentionPattern.FindAllStringSubmatch(userText, -1)
+	for _, mention := range mentions {
+		if a.Skills == nil {
+			return "", fmt.Errorf("unknown skill %q", mention[1])
+		}
+		if _, ok := a.Skills.skills[mention[1]]; !ok {
+			return "", fmt.Errorf("unknown skill %q", mention[1])
+		}
+	}
+	for _, mention := range mentions {
+		if _, err := a.activateSkill(mention[1]); err != nil {
+			return "", err
+		}
+	}
+	context := ""
+	if a.Workspace != nil {
+		var err error
+		context, err = DeliverWorkspace(a.Workspace, userText)
+		if err != nil {
+			return "", err
+		}
+	} else if attachPattern.MatchString(userText) {
+		return "", fmt.Errorf("attachments require a configured workspace")
+	}
 	if context != "" {
 		a.Messages = append(a.Messages, map[string]any{"role": "user", "content": context})
 	}
@@ -125,26 +168,12 @@ func (a *Agent) maybeCompact() {
 		fmt.Println("WARNING: compaction failed: ", err)
 		return
 	}
-	a.Messages = compacted
-	a.usageTokens, a.usageMsgCount = 0, 0
-}
-
-func (a *Agent) estimatedTokens() int {
-	if a.usageTokens > 0 && a.usageMsgCount <= len(a.Messages) {
-		return a.usageTokens + estimateTokens(a.Messages[a.usageMsgCount:])
-	}
-	return estimateTokens(a.Messages)
-}
-
-func (a *Agent) recordUsage(usage map[string]any, sent int) {
-	prompt, ok := usage["prompt_tokens"].(float64)
-	if !ok || prompt <= 0 {
+	if len(compacted) != len(a.Messages) {
 		a.usageTokens, a.usageMsgCount = 0, 0
-		return
+		a.usageSystem = ""
 	}
-	a.usageTokens, a.usageMsgCount = int(prompt), sent
+	a.Messages = compacted
 }
-
 
 func (a *Agent) runToolCalls(resp *model.LLMResponse) {
 	a.Messages = append(a.Messages, map[string]any{"role": "assistant", "content": resp.Content, "tool_calls": resp.ToolCalls})
@@ -164,13 +193,7 @@ func (a *Agent) runToolCalls(resp *model.LLMResponse) {
 		name, _ := fn["name"].(string)
 		arguments, _ := fn["arguments"].(string)
 
-		tool, _ := a.Tools.GetTool(name)
-		var result string
-		if tool.NeedsApproval && !a.requestApproval(name, arguments) {
-			result = "[tool ()" + name + ") access denied]"
-		} else {
-			result = a.Tools.Call(name, arguments)
-		}
+		result := a.Tools.Call(name, arguments)
 
 		a.Messages = append(a.Messages, map[string]any{
 			"role":         "tool",
