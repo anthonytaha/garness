@@ -41,6 +41,11 @@ func TestSandboxToolsWiring(t *testing.T) {
 			if result := agent.Tools.Call("read_file", `{"path":"file"}`); result != "command change" {
 				t.Fatal(result)
 			}
+			for _, name := range []string{"edit_file", "append_file"} {
+				if _, ok := agent.Tools.GetTool(name); !ok {
+					t.Fatalf("%s not registered", name)
+				}
+			}
 			if profile == "local" {
 				if body, _ := box.Original.ReadFile("file"); body != "command change" {
 					t.Fatal("local changes not applied")

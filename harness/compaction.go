@@ -22,7 +22,7 @@ unfinished threads or TODOs. Be faithful and concise; do not invent anything not
 If the transcript opens with a PREVIOUS SUMMARY, fold its content into your summary rather
 than summarizing it as dialogue, so nothing it recorded is lost.`
 
-func compact(provider model.Provider, modelName string, messages []map[string]any, keepHead int, keepTail int) ([]map[string]any, error) {
+func compact(provider model.Provider, modelName string, messages []map[string]any, keepHead int, keepTail int, observers ...*model.CompleteOptions) ([]map[string]any, error) {
 	n := len(messages)
 	if keepHead+keepTail >= n {
 		return messages, nil
@@ -34,7 +34,7 @@ func compact(provider model.Provider, modelName string, messages []map[string]an
 		return messages, nil
 	}
 
-	summary, err := summarize(provider, modelName, messages[headEnd:tailStart])
+	summary, err := summarize(provider, modelName, messages[headEnd:tailStart], observers...)
 	if err != nil {
 		return messages, err
 	}
@@ -49,15 +49,20 @@ func compact(provider model.Provider, modelName string, messages []map[string]an
 	return out, nil
 }
 
-func summarize(provider model.Provider, modelName string, messages []map[string]any) (string, error) {
+func summarize(provider model.Provider, modelName string, messages []map[string]any, observers ...*model.CompleteOptions) (string, error) {
 	req := []map[string]any{
 		{"role": "system", "content": SUMMARY_SYS_PROMPT},
 		{"role": "user", "content": renderTranscript(messages)},
 	}
-	resp, err := model.Chat(provider, req, &model.CompleteOptions{
+	opts := &model.CompleteOptions{
 		Model:     modelName,
 		MaxTokens: SUMMARY_MAX_TOKENS,
-	})
+	}
+	if len(observers) > 0 && observers[0] != nil {
+		opts.OnRetry = observers[0].OnRetry
+		opts.OnRateLimitRemaining = observers[0].OnRateLimitRemaining
+	}
+	resp, err := model.Chat(provider, req, opts)
 	if err != nil {
 		return "", fmt.Errorf("summarize conversation: %w", err)
 	}

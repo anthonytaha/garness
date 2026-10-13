@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func runREPL(scanner *bufio.Scanner, agent *harness.Agent, box *sandbox.Sandbox) {
+func runREPL(scanner *bufio.Scanner, agent *harness.Agent, box *sandbox.Sandbox, manager *sessionManager) {
 	fmt.Println("Welcome to Garness:")
 
 	for {
@@ -21,13 +21,16 @@ func runREPL(scanner *bufio.Scanner, agent *harness.Agent, box *sandbox.Sandbox)
 		if strings.TrimSpace(user) == "" {
 			continue
 		}
+		if strings.HasPrefix(user, ":") && manager.command(user, scanner) {
+			continue
+		}
 		if user == ":changes" || user == ":apply" {
 			var result string
 			var err error
 			if user == ":changes" {
-				result, err = box.Changes()
+				result, err = manager.box.Changes()
 			} else {
-				result, err = box.ApplyChanges()
+				result, err = manager.box.ApplyChanges()
 			}
 			if err != nil {
 				fmt.Println("error:", err)

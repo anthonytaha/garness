@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode/utf8"
 )
@@ -17,6 +18,7 @@ var nextFileID atomic.Uint64
 type Workspace struct {
 	Root      string
 	FileLimit int64
+	mutation  sync.Mutex
 }
 
 func NewWorkspace(root string) (*Workspace, error) {
@@ -202,17 +204,46 @@ func (ws *Workspace) Write(path, content string) string {
 }
 
 func (ws *Workspace) Edit(path, oldData, newData string) string {
-	body, err := ws.ReadFile(path)
-	if err != nil {
+	if err := ws.EditFile(path, oldData, newData); err != nil {
 		return "error: " + err.Error()
 	}
-	if !strings.Contains(body, oldData) {
-		return "error: text to replace not found"
+	return "edited " + path
+}
+
+// EditFile requires one exact match so an ambiguous edit cannot silently
+// replace the wrong occurrence. Read and replacement retain workspace checks.
+func (ws *Workspace) EditFile(path, oldData, newData string) error {
+	ws.mutation.Lock()
+	defer ws.mutation.Unlock()
+	if oldData == "" {
+		return fmt.Errorf("old_text must not be empty")
 	}
-	return ws.Write(path, strings.Replace(body, oldData, newData, 1))
+	body, err := ws.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	count := strings.Count(body, oldData)
+	if count != 1 {
+		return fmt.Errorf("old_text must match exactly once (found %d matches); read the file and provide a unique selection", count)
+	}
+	return ws.writeBytes(path, []byte(strings.Replace(body, oldData, newData, 1)), 0644, true)
+}
+
+// AppendFile preserves existing text, inserts no implicit newline, and creates
+// missing files. Use atomic replacement so hard links cannot affect other files.
+func (ws *Workspace) AppendFile(path, content string) error {
+	ws.mutation.Lock()
+	defer ws.mutation.Unlock()
+	body, err := ws.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return ws.writeBytes(path, []byte(body+content), 0644, true)
 }
 
 func (ws *Workspace) WriteFile(path, content string) error {
+	ws.mutation.Lock()
+	defer ws.mutation.Unlock()
 	return ws.writeBytes(path, []byte(content), 0644, true)
 }
 

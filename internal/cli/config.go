@@ -2,6 +2,7 @@ package cli
 
 import (
 	"anthonytaha/garness/harness"
+	"anthonytaha/garness/model"
 	"bufio"
 	"flag"
 	"fmt"
@@ -39,9 +40,13 @@ func loadEnvFile(path string) {
 }
 
 type config struct {
-	Profile       string
-	ContextBudget int
-	SkillsDir     string
+	New             bool
+	Resume          string
+	Profile         string
+	ContextBudget   int
+	MaxToolSteps    int
+	MaxOutputTokens int
+	SkillsDir       string
 }
 
 func loadConfig() (config, error) {
@@ -51,7 +56,38 @@ func loadConfig() (config, error) {
 		profile = "local"
 	}
 	flag.StringVar(&profile, "sandbox-profile", profile, "sandbox profile: local or isolated")
+	var fresh bool
+	var resume string
+	flag.BoolVar(&fresh, "new", false, "start a new session")
+	flag.StringVar(&resume, "resume", "", "resume session ID")
+	maxToolSteps := harness.MAX_TOOL_STEPS
+	if value, exists := os.LookupEnv("GARNESS_MAX_TOOL_STEPS"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parsed <= 0 {
+			return config{}, fmt.Errorf("GARNESS_MAX_TOOL_STEPS must be a positive integer")
+		}
+		maxToolSteps = parsed
+	}
+	flag.IntVar(&maxToolSteps, "max-tool-steps", maxToolSteps, "maximum tool rounds per turn")
+	maxOutputTokens := model.DefaultMaxOutputTokens
+	if value, exists := os.LookupEnv("GARNESS_MAX_OUTPUT_TOKENS"); exists {
+		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || parsed <= 0 {
+			return config{}, fmt.Errorf("GARNESS_MAX_OUTPUT_TOKENS must be a positive integer")
+		}
+		maxOutputTokens = parsed
+	}
+	flag.IntVar(&maxOutputTokens, "max-output-tokens", maxOutputTokens, "maximum output tokens per model response")
 	flag.Parse()
+	if maxOutputTokens <= 0 {
+		return config{}, fmt.Errorf("--max-output-tokens must be a positive integer")
+	}
+	if maxToolSteps <= 0 {
+		return config{}, fmt.Errorf("--max-tool-steps must be a positive integer")
+	}
+	if fresh && resume != "" {
+		return config{}, fmt.Errorf("--new and --resume are mutually exclusive")
+	}
 	contextBudget := harness.DEFAULT_CONTEXT_BUDGET
 	if value, exists := os.LookupEnv("GARNESS_CONTEXT_BUDGET"); exists {
 		budget, err := strconv.Atoi(strings.TrimSpace(value))
@@ -60,5 +96,5 @@ func loadConfig() (config, error) {
 		}
 		contextBudget = budget
 	}
-	return config{Profile: profile, ContextBudget: contextBudget, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
+	return config{New: fresh, Resume: resume, Profile: profile, ContextBudget: contextBudget, MaxToolSteps: maxToolSteps, MaxOutputTokens: maxOutputTokens, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
 }

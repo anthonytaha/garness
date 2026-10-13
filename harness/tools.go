@@ -11,6 +11,8 @@ func (a *Agent) ConfigureSandbox(s *sandbox.Sandbox) {
 	a.Tools.Approve = a.requestApproval
 	a.Tools.Register(tools.ReadFileTool(s.Workspace))
 	a.Tools.Register(tools.WriteFileTool(s.Workspace))
+	a.Tools.Register(tools.EditFileTool(s.Workspace))
+	a.Tools.Register(tools.AppendFileTool(s.Workspace))
 	a.Tools.Register(tools.ShellTool(s))
 	a.Tools.Register(tools.ReviewChangesTool(s))
 	a.Tools.Register(tools.ApplyChangesTool(s))

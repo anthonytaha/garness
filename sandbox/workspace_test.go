@@ -74,3 +74,34 @@ func TestWorkspaceSymlinkSwap(t *testing.T) {
 		t.Fatalf("outside file modified: %q %v", body, err)
 	}
 }
+
+func TestIncrementalWritesConfinementAndMode(t *testing.T) {
+	ws := testWorkspace(t)
+	outside := filepath.Join(t.TempDir(), "outside")
+	os.WriteFile(outside, []byte("original"), 0600)
+	os.Symlink(outside, filepath.Join(ws.Root, "symlink"))
+	os.Link(outside, filepath.Join(ws.Root, "hardlink"))
+	for _, path := range []string{"symlink", "hardlink"} {
+		if err := ws.AppendFile(path, "changed"); err == nil {
+			t.Fatal("unsafe append accepted")
+		}
+		if err := ws.EditFile(path, "original", "changed"); err == nil {
+			t.Fatal("unsafe edit accepted")
+		}
+	}
+	if body, _ := os.ReadFile(outside); string(body) != "original" {
+		t.Fatal("outside file modified")
+	}
+	ws.WriteFile("mode", "original")
+	os.Chmod(filepath.Join(ws.Root, "mode"), 0755)
+	if err := ws.AppendFile("mode", " suffix"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.EditFile("mode", "original", "replacement"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(ws.Root, "mode"))
+	if err != nil || info.Mode().Perm() != 0755 {
+		t.Fatal("mode not preserved")
+	}
+}

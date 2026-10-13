@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,12 +11,16 @@ import (
 	"time"
 )
 
+const DefaultMaxOutputTokens = 8192
+
 type CompleteOptions struct {
-	Model       string
-	Tools       []any
-	Temperature float64
-	MaxTokens   int
-	Timeout     time.Duration
+	Model                string
+	Tools                []any
+	Temperature          float64
+	MaxTokens            int
+	Timeout              time.Duration
+	OnRetry              func(status int, delay time.Duration)
+	OnRateLimitRemaining func(int64)
 }
 
 func completeOpenai(
@@ -25,7 +30,7 @@ func completeOpenai(
 ) (*LLMResponse, error) {
 	opts := CompleteOptions{
 		Temperature: 0,
-		MaxTokens:   1024,
+		MaxTokens:   DefaultMaxOutputTokens,
 		Timeout:     180 * time.Second,
 	}
 
@@ -36,7 +41,7 @@ func completeOpenai(
 		opts.Timeout = 180 * time.Second
 	}
 	if opts.MaxTokens == 0 {
-		opts.MaxTokens = 1024
+		opts.MaxTokens = DefaultMaxOutputTokens
 	}
 
 	model := opts.Model
@@ -61,7 +66,9 @@ func completeOpenai(
 
 	url := strings.TrimRight(provider.BaseUrl, "/") + "/chat/completions"
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 
 	if err != nil {
 		return nil, fmt.Errorf("create completeOpenai request: %w", err)
@@ -70,7 +77,7 @@ func completeOpenai(
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: opts.Timeout}
-	resp, err := client.Do(req)
+	resp, err := doCompletionRequest(client, req, opts.OnRetry, opts.OnRateLimitRemaining)
 
 	if err != nil {
 		return nil, fmt.Errorf("send completeOpenAi request: %w", err)
@@ -99,6 +106,12 @@ func completeOpenai(
 		var raw any
 		if err := json.Unmarshal(body, &raw); err != nil {
 			raw = string(body)
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, fmt.Errorf("model provider rate limit exceeded (HTTP 429): %v; automatic retries stopped. Wait before continuing; if this persists, check your provider request/token limits and workspace usage limits", raw)
+		}
+		if retryableStatus(resp.StatusCode) {
+			return nil, fmt.Errorf("model provider returned a temporary error (HTTP %s): %v; try again shortly", resp.Status, raw)
 		}
 		return nil, fmt.Errorf(
 			"completion request failed with status %s: %v",
@@ -134,11 +147,12 @@ func completeOpenai(
 	}
 
 	return &LLMResponse{
-		Content:      content,
-		Reasoning:    choice.Message.ReasoningContent,
-		ToolCalls:    toolCalls,
-		Usage:        data.Usage,
-		FinishReason: choice.FinishReason,
-		Raw:          raw,
+		Content:            content,
+		RateLimitRemaining: rateLimitRemaining(resp.Header),
+		Reasoning:          choice.Message.ReasoningContent,
+		ToolCalls:          toolCalls,
+		Usage:              data.Usage,
+		FinishReason:       choice.FinishReason,
+		Raw:                raw,
 	}, nil
 }

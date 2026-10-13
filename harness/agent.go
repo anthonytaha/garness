@@ -3,31 +3,40 @@ package harness
 import (
 	"anthonytaha/garness/model"
 	"anthonytaha/garness/sandbox"
+	"anthonytaha/garness/session"
 	"anthonytaha/garness/tools"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const DEFAULT_SYS_PROMPT string = "You are Garness, a coding agent"
 
-const MAX_TOOL_STEPS int = 6
+const MAX_TOOL_STEPS int = 32
 
 type Agent struct {
-	Model        string
-	Provider     model.Provider
-	Messages     []map[string]any
-	SystemPrompt string
-	AgentsDir    string
-	Skills       *SkillRegistry
-	activeSkills map[string]Skill
-	Tools        *tools.ToolRegistry
-	Workspace    *sandbox.Workspace
-	Approve      func(name, arguments string) bool
+	Transcript           []map[string]any
+	Checkpoint           func() error
+	OnRetry              func(int, time.Duration)
+	OnRateLimitRemaining func(int64)
+	Interrupted          bool
+	Model                string
+	Provider             model.Provider
+	Messages             []map[string]any
+	SystemPrompt         string
+	AgentsDir            string
+	Skills               *SkillRegistry
+	activeSkills         map[string]Skill
+	Tools                *tools.ToolRegistry
+	Workspace            *sandbox.Workspace
+	Approve              func(name, arguments string) bool
 
-	SummaryModel  string
-	ContextBudget int
+	SummaryModel    string
+	ContextBudget   int
+	MaxToolSteps    int
+	MaxOutputTokens int
 
 	usageTokens   int
 	usageMsgCount int
@@ -94,7 +103,15 @@ func NewAgent(modelName string, provider model.Provider, systemPrompt string, ag
 	return agent
 }
 
-func (a *Agent) Run(userText string) (string, error) {
+func (a *Agent) Run(userText string) (reply string, runErr error) {
+	accepted := false
+	defer func() {
+		if accepted && a.Checkpoint != nil {
+			if err := a.Checkpoint(); err != nil {
+				runErr = fmt.Errorf("save session: %w", err)
+			}
+		}
+	}()
 	// Validate every explicit reference before changing session state.
 	mentions := skillMentionPattern.FindAllStringSubmatch(userText, -1)
 	for _, mention := range mentions {
@@ -121,20 +138,43 @@ func (a *Agent) Run(userText string) (string, error) {
 		return "", fmt.Errorf("attachments require a configured workspace")
 	}
 	if context != "" {
-		a.Messages = append(a.Messages, map[string]any{"role": "user", "content": context})
+		a.appendMessage(map[string]any{"role": "user", "content": context})
 	}
-	a.Messages = append(a.Messages, map[string]any{"role": "user", "content": userText})
+	a.appendMessage(map[string]any{"role": "user", "content": userText})
+	accepted = true
+	a.Interrupted = true
+	if a.Checkpoint != nil {
+		if err := a.Checkpoint(); err != nil {
+			return "", err
+		}
+	}
 	specs := a.Tools.Specs()
 	tools := make([]any, len(specs))
 	for i, s := range specs {
 		tools[i] = s
 	}
 	options := &model.CompleteOptions{
-		Model: a.Model,
-		Tools: tools,
+		Model:                a.Model,
+		Tools:                tools,
+		MaxTokens:            a.MaxOutputTokens,
+		OnRetry:              a.OnRetry,
+		OnRateLimitRemaining: a.OnRateLimitRemaining,
 	}
-	for range MAX_TOOL_STEPS {
+	limit := a.MaxToolSteps
+	if limit <= 0 {
+		limit = MAX_TOOL_STEPS
+	}
+	for step := 0; step <= limit; step++ {
+		if step == limit {
+			a.appendMessage(map[string]any{"role": "user", "content": fmt.Sprintf("The tool limit of %d rounds for this turn has been reached. Stop using tools. Summarize completed work and any remaining work accurately; do not claim unfinished tasks are complete.", limit)})
+			options.Tools = nil
+		}
 		a.maybeCompact()
+		if a.Checkpoint != nil {
+			if err := a.Checkpoint(); err != nil {
+				return "", err
+			}
+		}
 		sent := len(a.Messages)
 		resp, err := model.Chat(
 			a.Provider,
@@ -145,13 +185,25 @@ func (a *Agent) Run(userText string) (string, error) {
 			return "", err
 		}
 		a.recordUsage(resp.Usage, sent)
+		if resp.FinishReason != nil && *resp.FinishReason == "length" {
+			return "", fmt.Errorf("model output reached its token limit; increase --max-output-tokens or request smaller edits. No tools from the truncated response were executed")
+		}
 		if len(resp.ToolCalls) == 0 {
-			a.Messages = append(a.Messages, map[string]any{"role": "assistant", "content": resp.Content})
+			a.appendMessage(map[string]any{"role": "assistant", "content": resp.Content})
+			a.Interrupted = false
+			if step == limit {
+				return fmt.Sprintf("Tool limit (%d rounds) reached.\n%s\nAsk me to continue if there is remaining work.", limit, resp.Content), nil
+			}
 			return resp.Content, nil
 		}
-		a.runToolCalls(resp)
+		if step == limit {
+			return "", fmt.Errorf("tool limit (%d rounds) reached; provider requested more tools despite the summary-only request. Progress is saved; ask me to continue", limit)
+		}
+		if err := a.runToolCalls(resp); err != nil {
+			return "", err
+		}
 	}
-	return "", fmt.Errorf("exceeded tool-step budget")
+	return "", fmt.Errorf("tool limit (%d rounds) reached; ask me to continue", limit)
 
 }
 
@@ -163,7 +215,7 @@ func (a *Agent) maybeCompact() {
 	if summaryModel == "" {
 		summaryModel = a.Model
 	}
-	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL)
+	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL, &model.CompleteOptions{OnRetry: a.OnRetry, OnRateLimitRemaining: a.OnRateLimitRemaining})
 	if err != nil {
 		fmt.Println("WARNING: compaction failed: ", err)
 		return
@@ -175,8 +227,13 @@ func (a *Agent) maybeCompact() {
 	a.Messages = compacted
 }
 
-func (a *Agent) runToolCalls(resp *model.LLMResponse) {
-	a.Messages = append(a.Messages, map[string]any{"role": "assistant", "content": resp.Content, "tool_calls": resp.ToolCalls})
+func (a *Agent) runToolCalls(resp *model.LLMResponse) error {
+	a.appendMessage(map[string]any{"role": "assistant", "content": resp.Content, "tool_calls": resp.ToolCalls})
+	if a.Checkpoint != nil {
+		if err := a.Checkpoint(); err != nil {
+			return err
+		}
+	}
 	for _, call := range resp.ToolCalls {
 		tc, ok := call.(map[string]any)
 		if !ok {
@@ -195,10 +252,81 @@ func (a *Agent) runToolCalls(resp *model.LLMResponse) {
 
 		result := a.Tools.Call(name, arguments)
 
-		a.Messages = append(a.Messages, map[string]any{
+		a.appendMessage(map[string]any{
 			"role":         "tool",
 			"tool_call_id": id,
 			"content":      result,
 		})
+		if a.Checkpoint != nil {
+			if err := a.Checkpoint(); err != nil {
+				return err
+			}
+		}
+	}
+	if a.Checkpoint != nil {
+		return a.Checkpoint()
+	}
+	return nil
+}
+
+func (a *Agent) appendMessage(m map[string]any) {
+	a.Messages = append(a.Messages, m)
+	a.Transcript = append(a.Transcript, m)
+}
+func (a *Agent) Snapshot(v *session.Session) {
+	v.Messages = a.Messages
+	v.Transcript = a.Transcript
+	v.Interrupted = a.Interrupted
+	v.Skills = nil
+	for name := range a.activeSkills {
+		v.Skills = append(v.Skills, name)
 	}
 }
+func (a *Agent) Restore(v *session.Session) []error {
+	a.Messages = append([]map[string]any{{"role": "system", "content": a.SystemPrompt}}, v.Messages...)
+	if len(v.Messages) > 0 && msgRole(v.Messages[0]) == "system" {
+		a.Messages = a.Messages[1:]
+	}
+	a.Transcript = append([]map[string]any(nil), v.Transcript...)
+	a.activeSkills = make(map[string]Skill)
+	var warnings []error
+	for _, name := range v.Skills {
+		if _, err := a.activateSkill(name); err != nil {
+			warnings = append(warnings, err)
+		}
+	}
+	a.refreshSkillContext()
+	a.usageTokens = 0
+	a.usageMsgCount = 0
+	a.usageSystem = ""
+	// Complete unanswered tool calls with an interruption marker; never execute them.
+	answered := map[string]bool{}
+	for _, m := range a.Messages {
+		if msgRole(m) == "tool" {
+			id, _ := m["tool_call_id"].(string)
+			answered[id] = true
+		}
+	}
+	var repaired []map[string]any
+	for _, m := range a.Messages {
+		repaired = append(repaired, m)
+		for _, call := range msgToolCalls(m) {
+			tc, ok := call.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := tc["id"].(string)
+			if !answered[id] {
+				marker := map[string]any{"role": "tool", "tool_call_id": id, "content": "Interrupted before a result was saved. Execution status is unknown; inspect workspace before retrying."}
+				repaired = append(repaired, marker)
+				a.Transcript = append(a.Transcript, marker)
+			}
+		}
+	}
+	a.Messages = repaired
+	a.appendMessage(map[string]any{"role": "user", "content": "Session resumed with a fresh sandbox from current workspace files. Previous isolated changes were not restored. Recheck files before continuing."})
+	a.Interrupted = false
+	return warnings
+}
+
+func (a *Agent) ResetUsage() { a.usageTokens = 0; a.usageMsgCount = 0; a.usageSystem = "" }

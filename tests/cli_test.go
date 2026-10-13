@@ -39,10 +39,10 @@ func TestCLIProfiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			command := exec.Command(binary, item.Args...)
+			command := exec.Command(binary, append([]string{"--new"}, item.Args...)...)
 			command.Dir = workspace
 			command.Stdin = strings.NewReader(item.Input)
-			command.Env = append(os.Environ(), "GARNESS_SANDBOX_PROFILE="+item.Profile, "GARNESS_SKILLS_DIR=", "GARNESS_CONTEXT_BUDGET=0", "MISTRAL_API_KEY=")
+			command.Env = append(os.Environ(), "GARNESS_SANDBOX_PROFILE="+item.Profile, "GARNESS_SKILLS_DIR=", "GARNESS_CONTEXT_BUDGET=0", "MISTRAL_API_KEY=", "GARNESS_SESSION_DIR="+t.TempDir())
 			output, err := command.CombinedOutput()
 			if (err != nil) != item.Fails || !strings.Contains(string(output), item.Expected) {
 				t.Fatalf("%s\n%v", output, err)

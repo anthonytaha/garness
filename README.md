@@ -3,6 +3,11 @@ Garness is a lightweight privacy and security first agent harness written in Go.
 It currently featues:
 - OpenAI Chat complete compatibility
 - Simple message memory
+- Persistent sessions with autosave and a workspace session picker
+- Session listing, inspection, resume, rename, and deletion
+- Independent session branching and JSON or Markdown export
+- Full transcript preservation across context compaction
+- Fresh sandboxes on resume and interrupted tool-call recovery
 - Agent system prompts
 - Basic Tool system
 - Workspaces

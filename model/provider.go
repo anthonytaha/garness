@@ -1,12 +1,13 @@
 package model
 
 type LLMResponse struct {
-	Content      string         `json:"content"`
-	Reasoning    *string        `json:"reasoning,omitempty"`
-	ToolCalls    []any          `json:"tool_calls"`
-	Usage        map[string]any `json:"usage"`
-	FinishReason *string        `json:"finish_reasoning,omitempty"`
-	Raw          map[string]any `json:"raw"`
+	Content            string         `json:"content"`
+	Reasoning          *string        `json:"reasoning,omitempty"`
+	ToolCalls          []any          `json:"tool_calls"`
+	Usage              map[string]any `json:"usage"`
+	FinishReason       *string        `json:"finish_reasoning,omitempty"`
+	RateLimitRemaining *int64         `json:"rate_limit_remaining,omitempty"`
+	Raw                map[string]any `json:"raw"`
 }
 
 func NewLLMResponse(content string) *LLMResponse {
