@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -13,11 +14,41 @@ type Tool struct {
 	Func          ToolFunc
 	Parameters    map[string]any
 	NeedsApproval bool
+	ContextFunc   func(context.Context, map[string]any) (string, error)
 }
 
 type ToolRegistry struct {
-	tools   map[string]Tool
-	Approve func(name, arguments string) bool
+	tools      map[string]Tool
+	Approve    func(name, arguments string) bool
+	BeforeCall func(context.Context, string, map[string]any) error
+}
+
+type CallResult struct {
+	Content string
+	Err     error
+}
+
+func (r CallResult) String() string {
+	if r.Err != nil {
+		return "error: " + r.Err.Error()
+	}
+	return r.Content
+}
+
+type DeniedError struct{ Reason string }
+
+func (e *DeniedError) Error() string { return e.Reason }
+
+func (r *ToolRegistry) Restrict(names []string) {
+	allowed := make(map[string]bool)
+	for _, name := range names {
+		allowed[name] = true
+	}
+	for name := range r.tools {
+		if !allowed[name] {
+			delete(r.tools, name)
+		}
+	}
 }
 
 func NewToolRegistry() *ToolRegistry {
@@ -53,30 +84,48 @@ func (r *ToolRegistry) Specs() []map[string]any {
 }
 
 func (r *ToolRegistry) Call(name, arguments string) string {
+	return r.CallContext(context.Background(), name, arguments).String()
+}
+
+func (r *ToolRegistry) CallContext(ctx context.Context, name, arguments string) CallResult {
+	if err := ctx.Err(); err != nil {
+		return CallResult{Err: err}
+	}
 	tool, ok := r.tools[name]
 	if !ok {
-		return fmt.Sprintf("error: unknown tool %q", name)
+		return CallResult{Err: fmt.Errorf("unknown tool %q", name)}
 	}
 
 	args := map[string]any{}
 	if arguments != "" {
 		if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-			return fmt.Sprintf(
-				"error: could not parse arguments %q",
-				arguments,
-			)
+			return CallResult{Err: fmt.Errorf("could not parse arguments %q", arguments)}
+		}
+	}
+	if r.BeforeCall != nil {
+		if err := r.BeforeCall(ctx, name, args); err != nil {
+			return CallResult{Err: err}
 		}
 	}
 
 	if tool.NeedsApproval && (r.Approve == nil || !r.Approve(name, arguments)) {
-		return "error: tool access denied"
+		return CallResult{Err: &DeniedError{Reason: "tool access denied"}}
 	}
-	result, err := tool.Func(args)
+	if err := ctx.Err(); err != nil {
+		return CallResult{Err: err}
+	}
+	var result string
+	var err error
+	if tool.ContextFunc != nil {
+		result, err = tool.ContextFunc(ctx, args)
+	} else {
+		result, err = tool.Func(args)
+	}
 	if err != nil {
-		return "error: " + err.Error()
+		return CallResult{Content: result, Err: err}
 	}
 
-	return result
+	return CallResult{Content: result}
 }
 
 func (r *ToolRegistry) Len() int {

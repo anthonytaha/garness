@@ -5,6 +5,8 @@ import (
 	"anthonytaha/garness/sandbox"
 	"anthonytaha/garness/session"
 	"anthonytaha/garness/tools"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +18,13 @@ const DEFAULT_SYS_PROMPT string = "You are Garness, a coding agent"
 
 const MAX_TOOL_STEPS int = 32
 
+var ErrToolLimit = errors.New("agent tool limit reached")
+
 type Agent struct {
+	BeforeRequest        func(int) error
+	OnUsage              func(map[string]any)
+	OnToolResult         func(string, tools.CallResult)
+	RequireCompletion    bool
 	Transcript           []map[string]any
 	Checkpoint           func() error
 	OnRetry              func(int, time.Duration)
@@ -104,6 +112,13 @@ func NewAgent(modelName string, provider model.Provider, systemPrompt string, ag
 }
 
 func (a *Agent) Run(userText string) (reply string, runErr error) {
+	return a.RunContext(context.Background(), userText)
+}
+
+func (a *Agent) RunContext(ctx context.Context, userText string) (reply string, runErr error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	accepted := false
 	defer func() {
 		if accepted && a.Checkpoint != nil {
@@ -154,6 +169,9 @@ func (a *Agent) Run(userText string) (reply string, runErr error) {
 		tools[i] = s
 	}
 	options := &model.CompleteOptions{
+		Context:              ctx,
+		BeforeRequest:        a.BeforeRequest,
+		OnUsage:              a.OnUsage,
 		Model:                a.Model,
 		Tools:                tools,
 		MaxTokens:            a.MaxOutputTokens,
@@ -165,11 +183,17 @@ func (a *Agent) Run(userText string) (reply string, runErr error) {
 		limit = MAX_TOOL_STEPS
 	}
 	for step := 0; step <= limit; step++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if step == limit {
+			if a.RequireCompletion {
+				return "", ErrToolLimit
+			}
 			a.appendMessage(map[string]any{"role": "user", "content": fmt.Sprintf("The tool limit of %d rounds for this turn has been reached. Stop using tools. Summarize completed work and any remaining work accurately; do not claim unfinished tasks are complete.", limit)})
 			options.Tools = nil
 		}
-		a.maybeCompact()
+		a.maybeCompactContext(ctx)
 		if a.Checkpoint != nil {
 			if err := a.Checkpoint(); err != nil {
 				return "", err
@@ -199,7 +223,7 @@ func (a *Agent) Run(userText string) (reply string, runErr error) {
 		if step == limit {
 			return "", fmt.Errorf("tool limit (%d rounds) reached; provider requested more tools despite the summary-only request. Progress is saved; ask me to continue", limit)
 		}
-		if err := a.runToolCalls(resp); err != nil {
+		if err := a.runToolCallsContext(ctx, resp); err != nil {
 			return "", err
 		}
 	}
@@ -208,6 +232,10 @@ func (a *Agent) Run(userText string) (reply string, runErr error) {
 }
 
 func (a *Agent) maybeCompact() {
+	a.maybeCompactContext(context.Background())
+}
+
+func (a *Agent) maybeCompactContext(ctx context.Context) {
 	if a.ContextBudget <= 0 || a.estimatedTokens() <= a.ContextBudget {
 		return
 	}
@@ -215,7 +243,7 @@ func (a *Agent) maybeCompact() {
 	if summaryModel == "" {
 		summaryModel = a.Model
 	}
-	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL, &model.CompleteOptions{OnRetry: a.OnRetry, OnRateLimitRemaining: a.OnRateLimitRemaining})
+	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL, &model.CompleteOptions{Context: ctx, BeforeRequest: a.BeforeRequest, OnUsage: a.OnUsage, OnRetry: a.OnRetry, OnRateLimitRemaining: a.OnRateLimitRemaining})
 	if err != nil {
 		fmt.Println("WARNING: compaction failed: ", err)
 		return
@@ -228,6 +256,10 @@ func (a *Agent) maybeCompact() {
 }
 
 func (a *Agent) runToolCalls(resp *model.LLMResponse) error {
+	return a.runToolCallsContext(context.Background(), resp)
+}
+
+func (a *Agent) runToolCallsContext(ctx context.Context, resp *model.LLMResponse) error {
 	a.appendMessage(map[string]any{"role": "assistant", "content": resp.Content, "tool_calls": resp.ToolCalls})
 	if a.Checkpoint != nil {
 		if err := a.Checkpoint(); err != nil {
@@ -250,12 +282,15 @@ func (a *Agent) runToolCalls(resp *model.LLMResponse) error {
 		name, _ := fn["name"].(string)
 		arguments, _ := fn["arguments"].(string)
 
-		result := a.Tools.Call(name, arguments)
+		result := a.Tools.CallContext(ctx, name, arguments)
+		if a.OnToolResult != nil {
+			a.OnToolResult(name, result)
+		}
 
 		a.appendMessage(map[string]any{
 			"role":         "tool",
 			"tool_call_id": id,
-			"content":      result,
+			"content":      result.String(),
 		})
 		if a.Checkpoint != nil {
 			if err := a.Checkpoint(); err != nil {

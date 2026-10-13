@@ -41,8 +41,16 @@ func retryDelay(status int, header string, attempt int, now time.Time) time.Dura
 // Retry only explicit transient HTTP responses. Transport errors may leave
 // request execution ambiguous and are returned unchanged. Each attempt uses
 // the original payload and shares its overall deadline.
-func doCompletionRequest(client *http.Client, req *http.Request, onRetry func(int, time.Duration), onRemaining func(int64)) (*http.Response, error) {
+func doCompletionRequest(client *http.Client, req *http.Request, onRetry func(int, time.Duration), onRemaining func(int64), before ...func() error) (*http.Response, error) {
 	for attempt := 0; attempt < completionAttempts; attempt++ {
+		if err := req.Context().Err(); err != nil {
+			return nil, err
+		}
+		if len(before) > 0 && before[0] != nil {
+			if err := before[0](); err != nil {
+				return nil, err
+			}
+		}
 		current := req.Clone(req.Context())
 		body, err := req.GetBody()
 		if err != nil {
@@ -81,6 +89,20 @@ func doCompletionRequest(client *http.Client, req *http.Request, onRetry func(in
 	}
 	panic("unreachable")
 }
+
+type ProviderError struct {
+	Status int
+	Detail string
+}
+
+func (e *ProviderError) Error() string {
+	if e.Status == http.StatusTooManyRequests {
+		return fmt.Sprintf("model provider rate limit exceeded (HTTP 429): %s; automatic retries stopped. Wait before continuing; check provider request/token limits", e.Detail)
+	}
+	return fmt.Sprintf("completion request failed with HTTP %d: %s", e.Status, e.Detail)
+}
+
+func (e *ProviderError) Temporary() bool { return retryableStatus(e.Status) }
 
 // Missing or invalid values stay unknown rather than becoming a zero quota.
 func rateLimitRemaining(header http.Header) *int64 {

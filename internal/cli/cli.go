@@ -84,6 +84,6 @@ func Run() int {
 	defer manager.close()
 	defer func() { manager.box.Close() }()
 	agent.Checkpoint = manager.save
-	runREPL(scanner, agent, box, manager)
+	runREPL(scanner, agent, box, manager, config.OrchestrationLimits)
 	return 0
 }

@@ -14,6 +14,9 @@ import (
 const DefaultMaxOutputTokens = 8192
 
 type CompleteOptions struct {
+	Context              context.Context
+	BeforeRequest        func(int) error
+	OnUsage              func(map[string]any)
 	Model                string
 	Tools                []any
 	Temperature          float64
@@ -66,7 +69,11 @@ func completeOpenai(
 
 	url := strings.TrimRight(provider.BaseUrl, "/") + "/chat/completions"
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, opts.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 
@@ -77,7 +84,15 @@ func completeOpenai(
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: opts.Timeout}
-	resp, err := doCompletionRequest(client, req, opts.OnRetry, opts.OnRateLimitRemaining)
+	before := func() error {
+		if opts.BeforeRequest != nil {
+			// Reserve a conservative byte-based prompt estimate plus maximum output,
+			// including every HTTP retry, before issuing the request.
+			return opts.BeforeRequest(len(body) + opts.MaxTokens)
+		}
+		return nil
+	}
+	resp, err := doCompletionRequest(client, req, opts.OnRetry, opts.OnRateLimitRemaining, before)
 
 	if err != nil {
 		return nil, fmt.Errorf("send completeOpenAi request: %w", err)
@@ -107,17 +122,7 @@ func completeOpenai(
 		if err := json.Unmarshal(body, &raw); err != nil {
 			raw = string(body)
 		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, fmt.Errorf("model provider rate limit exceeded (HTTP 429): %v; automatic retries stopped. Wait before continuing; if this persists, check your provider request/token limits and workspace usage limits", raw)
-		}
-		if retryableStatus(resp.StatusCode) {
-			return nil, fmt.Errorf("model provider returned a temporary error (HTTP %s): %v; try again shortly", resp.Status, raw)
-		}
-		return nil, fmt.Errorf(
-			"completion request failed with status %s: %v",
-			resp.Status,
-			raw,
-		)
+		return nil, &ProviderError{Status: resp.StatusCode, Detail: fmt.Sprint(raw)}
 	}
 
 	var raw map[string]any
@@ -133,6 +138,9 @@ func completeOpenai(
 	}
 
 	choice := data.Choices[0]
+	if opts.OnUsage != nil {
+		opts.OnUsage(data.Usage)
+	}
 	content := ""
 	if choice.Message.Content != nil {
 		content = *choice.Message.Content

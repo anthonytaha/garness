@@ -3,6 +3,7 @@ package cli
 import (
 	"anthonytaha/garness/harness"
 	"anthonytaha/garness/model"
+	"anthonytaha/garness/orchestration"
 	"bufio"
 	"flag"
 	"fmt"
@@ -40,13 +41,14 @@ func loadEnvFile(path string) {
 }
 
 type config struct {
-	New             bool
-	Resume          string
-	Profile         string
-	ContextBudget   int
-	MaxToolSteps    int
-	MaxOutputTokens int
-	SkillsDir       string
+	OrchestrationLimits orchestration.Limits
+	New                 bool
+	Resume              string
+	Profile             string
+	ContextBudget       int
+	MaxToolSteps        int
+	MaxOutputTokens     int
+	SkillsDir           string
 }
 
 func loadConfig() (config, error) {
@@ -78,12 +80,36 @@ func loadConfig() (config, error) {
 		maxOutputTokens = parsed
 	}
 	flag.IntVar(&maxOutputTokens, "max-output-tokens", maxOutputTokens, "maximum output tokens per model response")
+	limits := orchestration.DefaultLimits()
+	for _, setting := range []struct {
+		name, flag, help string
+		value            *int
+	}{
+		{"GARNESS_WORKERS", "workers", "maximum concurrent subagents (1–16)", &limits.Workers},
+		{"GARNESS_RUN_REQUESTS", "run-requests", "maximum model HTTP attempts per orchestration run", &limits.MaxRequests},
+		{"GARNESS_RUN_TOKENS", "run-tokens", "maximum reserved tokens per orchestration run", &limits.MaxReservedTokens},
+		{"GARNESS_RUN_TOOL_CALLS", "run-tool-calls", "maximum worker and verification tool calls per run", &limits.MaxToolCalls},
+		{"GARNESS_RUN_TIMEOUT", "run-timeout", "orchestration execution deadline in seconds", &limits.TimeoutSeconds},
+	} {
+		if value, exists := os.LookupEnv(setting.name); exists {
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || parsed <= 0 {
+				return config{}, fmt.Errorf("%s must be a positive integer", setting.name)
+			}
+			*setting.value = parsed
+		}
+		flag.IntVar(setting.value, setting.flag, *setting.value, setting.help)
+	}
 	flag.Parse()
 	if maxOutputTokens <= 0 {
 		return config{}, fmt.Errorf("--max-output-tokens must be a positive integer")
 	}
 	if maxToolSteps <= 0 {
 		return config{}, fmt.Errorf("--max-tool-steps must be a positive integer")
+	}
+	limits.MaxToolSteps, limits.MaxOutputTokens = maxToolSteps, maxOutputTokens
+	if err := limits.Validate(); err != nil {
+		return config{}, err
 	}
 	if fresh && resume != "" {
 		return config{}, fmt.Errorf("--new and --resume are mutually exclusive")
@@ -96,5 +122,5 @@ func loadConfig() (config, error) {
 		}
 		contextBudget = budget
 	}
-	return config{New: fresh, Resume: resume, Profile: profile, ContextBudget: contextBudget, MaxToolSteps: maxToolSteps, MaxOutputTokens: maxOutputTokens, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
+	return config{OrchestrationLimits: limits, New: fresh, Resume: resume, Profile: profile, ContextBudget: contextBudget, MaxToolSteps: maxToolSteps, MaxOutputTokens: maxOutputTokens, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
 }

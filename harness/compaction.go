@@ -59,6 +59,9 @@ func summarize(provider model.Provider, modelName string, messages []map[string]
 		MaxTokens: SUMMARY_MAX_TOKENS,
 	}
 	if len(observers) > 0 && observers[0] != nil {
+		opts.Context = observers[0].Context
+		opts.BeforeRequest = observers[0].BeforeRequest
+		opts.OnUsage = observers[0].OnUsage
 		opts.OnRetry = observers[0].OnRetry
 		opts.OnRateLimitRemaining = observers[0].OnRateLimitRemaining
 	}

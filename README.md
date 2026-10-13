@@ -21,6 +21,20 @@ It currently featues:
 - Protected files and confined attachment and skill reads
 - Isolated change review and approved copy-back
 - Command timeouts, bounded output, and filtered environments
+- Subagent orchestration with planning, versioned plan approvals, execution, verification, and bounded repairs
+- Parallel task scheduling with dependency validation and configurable worker limits
+- Independent subagent transcripts, tool permissions, write scopes, skills, and isolated workspaces
+- Read-only planning and review agents with structured results
+- File and shell acceptance checks, combined workspace verification, and dependent task revalidation
+- Conflict detection and serial integration of verified worker changes
+- Shared request, token reservation, and tool budgets with execution deadlines
+- Cancellation of model requests, approval waits, and sandbox commands
+- Structured failures and provider retries that preserve completed tool results
+- Persistent orchestration runs, event histories, attempt artifacts, and accepted workspace changes
+- Interrupted attempt reconciliation and recovery of interrupted final copy-back
+- Serialized approval prompts and coordinator-controlled final change review and approved copy-back
+- Orchestration CLI commands: :plan, :approve, :reject, :execute, :run-status, and :cancel
+- Run management CLI commands: :runs, :run-resume, :attempt, :retry, :reconcile-apply, and :run-close
 
 
 # Why?

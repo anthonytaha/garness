@@ -2,13 +2,14 @@ package tools
 
 import (
 	"anthonytaha/garness/sandbox"
+	"context"
 	"fmt"
 	"strings"
 	"time"
 )
 
 func ShellTool(s *sandbox.Sandbox) Tool {
-	return Tool{
+	t := Tool{
 		Name:        "shell",
 		Description: "Run a shell command in the selected sandbox. Network is disabled unless exact domains are requested and approved. Local changes apply automatically; isolated changes require apply_changes.",
 		Parameters: map[string]any{
@@ -28,7 +29,7 @@ func ShellTool(s *sandbox.Sandbox) Tool {
 			},
 			"required": []string{"command"},
 		},
-		Func: func(args map[string]any) (string, error) {
+		ContextFunc: func(ctx context.Context, args map[string]any) (string, error) {
 			command, ok := args["command"].(string)
 			if !ok || strings.TrimSpace(command) == "" {
 				return "", fmt.Errorf("command must be a non-empty string")
@@ -60,7 +61,26 @@ func ShellTool(s *sandbox.Sandbox) Tool {
 				}
 				request.Timeout = time.Duration(seconds) * time.Second
 			}
-			return s.Run(request)
+			result, err := s.RunResultContext(ctx, request)
+			if err != nil {
+				return "", err
+			}
+			if result.ExitCode != 0 {
+				return "", &ShellExitError{Result: result}
+			}
+			suffix := ""
+			if result.Truncated {
+				suffix = "\n[output truncated]"
+			}
+			return fmt.Sprintf("exit code: %d\n%s%s", result.ExitCode, result.Output, suffix), nil
 		},
 	}
+	t.Func = func(args map[string]any) (string, error) { return t.ContextFunc(context.Background(), args) }
+	return t
+}
+
+type ShellExitError struct{ Result sandbox.CommandResult }
+
+func (e *ShellExitError) Error() string {
+	return fmt.Sprintf("exit code: %d\n%s", e.Result.ExitCode, e.Result.Output)
 }

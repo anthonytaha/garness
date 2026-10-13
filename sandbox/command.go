@@ -14,30 +14,42 @@ func (s *Sandbox) Run(request CommandRequest) (string, error) {
 }
 
 func (s *Sandbox) RunContext(parent context.Context, request CommandRequest) (string, error) {
+	result, err := s.RunResultContext(parent, request)
+	if err != nil {
+		return "", err
+	}
+	suffix := ""
+	if result.Truncated {
+		suffix = "\n[output truncated]"
+	}
+	return fmt.Sprintf("exit code: %d\n%s%s", result.ExitCode, result.Output, suffix), nil
+}
+
+func (s *Sandbox) RunResultContext(parent context.Context, request CommandRequest) (CommandResult, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if err := parent.Err(); err != nil {
-		return "", err
+		return CommandResult{}, err
 	}
 	if request.Timeout <= 0 {
 		request.Timeout = s.Policy.Timeout
 	}
 	if request.Timeout > s.Policy.Timeout {
-		return "", fmt.Errorf("timeout exceeds sandbox policy")
+		return CommandResult{}, fmt.Errorf("timeout exceeds sandbox policy")
 	}
 	domains, err := approvedDomains(request.Domains)
 	if err != nil {
-		return "", err
+		return CommandResult{}, err
 	}
 	if strings.TrimSpace(request.Command) == "" {
-		return "", fmt.Errorf("command must not be empty")
+		return CommandResult{}, fmt.Errorf("command must not be empty")
 	}
 	if s.Runner == nil {
-		return "", fmt.Errorf("command runner is not configured")
+		return CommandResult{}, fmt.Errorf("command runner is not configured")
 	}
 	if runner, ok := s.Runner.(interface{ Check(bool) error }); ok {
 		if err = runner.Check(len(domains) > 0); err != nil {
-			return "", err
+			return CommandResult{}, err
 		}
 	}
 	workspace := s.Workspace
@@ -46,35 +58,35 @@ func (s *Sandbox) RunContext(parent context.Context, request CommandRequest) (st
 		var directory string
 		directory, workspace, baseline, err = createSnapshot(s.Original, s.Policy)
 		if err != nil {
-			return "", err
+			return CommandResult{}, err
 		}
 		defer os.RemoveAll(directory)
 	}
 	cwd := filepath.Clean(request.Cwd)
 	if filepath.IsAbs(cwd) || cwd == ".." || strings.HasPrefix(cwd, ".."+string(filepath.Separator)) || protectedPath(cwd, true) {
-		return "", fmt.Errorf("cwd must be an unprotected workspace-relative directory")
+		return CommandResult{}, fmt.Errorf("cwd must be an unprotected workspace-relative directory")
 	}
 	request.Cwd = cwd
 	cwdRoot, _, err := workspace.parent(filepath.Join(cwd, ".garness-cwd"), false, false)
 	if err != nil {
-		return "", fmt.Errorf("cwd is not a workspace directory: %w", err)
+		return CommandResult{}, fmt.Errorf("cwd is not a workspace directory: %w", err)
 	}
 	cwdRoot.Close()
 
 	var grant *NetworkGrant
 	if len(domains) > 0 {
 		if s.Approve == nil || !s.Approve("shell_network", networkApproval(request)) {
-			return "", fmt.Errorf("network access denied")
+			return CommandResult{}, &ApprovalDeniedError{Action: "network access"}
 		}
 		listener, cleanup, listenErr := grantListener()
 		if listenErr != nil {
-			return "", listenErr
+			return CommandResult{}, listenErr
 		}
 		defer cleanup()
 
 		grant, err = newNetworkGrant(listener, domains)
 		if err != nil {
-			return "", err
+			return CommandResult{}, err
 		}
 		defer grant.Close()
 	}
@@ -85,25 +97,21 @@ func (s *Sandbox) RunContext(parent context.Context, request CommandRequest) (st
 		grant.Close()
 	}
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("command cancelled: %w", ctx.Err())
+		return CommandResult{}, fmt.Errorf("command cancelled: %w", ctx.Err())
 	}
 	if err != nil {
-		return "", err
+		return CommandResult{}, err
 	}
 	if s.Policy.Profile == "local" {
 		after, scanErr := scanWorkspace(workspace, s.Policy, false)
 		if scanErr != nil {
-			return "", fmt.Errorf("command changes rejected: %w", scanErr)
+			return CommandResult{}, fmt.Errorf("command changes rejected: %w", scanErr)
 		}
 		if err = applySnapshot(s.Original, s.Policy, baseline, after); err != nil {
-			return "", err
+			return CommandResult{}, err
 		}
 	}
-	suffix := ""
-	if result.Truncated {
-		suffix = "\n[output truncated]"
-	}
-	return fmt.Sprintf("exit code: %d\n%s%s", result.ExitCode, result.Output, suffix), nil
+	return result, nil
 }
 
 func networkApproval(request CommandRequest) string {

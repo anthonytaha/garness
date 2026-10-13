@@ -100,7 +100,7 @@ func (s *Sandbox) ApplyChanges() (string, error) {
 	}
 	review := changeReview(changes, s.baseline, after)
 	if s.Approve == nil || !s.Approve("apply_changes", review) {
-		return "", fmt.Errorf("change application denied")
+		return "", &ApprovalDeniedError{Action: "change application"}
 	}
 	if err = applySnapshot(s.Original, s.Policy, s.baseline, after); err != nil {
 		return "", err
