@@ -41,6 +41,9 @@ func loadEnvFile(path string) {
 }
 
 type config struct {
+	AccentColor         string
+	Plain               bool
+	NoStream            bool
 	OrchestrationLimits orchestration.Limits
 	New                 bool
 	Resume              string
@@ -58,6 +61,14 @@ func loadConfig() (config, error) {
 		profile = "local"
 	}
 	flag.StringVar(&profile, "sandbox-profile", profile, "sandbox profile: local or isolated")
+	accentColor := strings.TrimSpace(os.Getenv("GARNESS_ACCENT_COLOR"))
+	if accentColor == "" {
+		accentColor = "green"
+	}
+	flag.StringVar(&accentColor, "accent-color", accentColor, "terminal accent: green (default), amber, blue, cyan, magenta, red, white, #RRGGBB, or 0–255")
+	var plain, noStream bool
+	flag.BoolVar(&plain, "plain", false, "use the plain line-based interface")
+	flag.BoolVar(&noStream, "no-stream", false, "disable streaming model responses")
 	var fresh bool
 	var resume string
 	flag.BoolVar(&fresh, "new", false, "start a new session")
@@ -101,6 +112,10 @@ func loadConfig() (config, error) {
 		flag.IntVar(setting.value, setting.flag, *setting.value, setting.help)
 	}
 	flag.Parse()
+	accentColor, err := parseAccentColor(accentColor)
+	if err != nil {
+		return config{}, fmt.Errorf("--accent-color / GARNESS_ACCENT_COLOR: %w", err)
+	}
 	if maxOutputTokens <= 0 {
 		return config{}, fmt.Errorf("--max-output-tokens must be a positive integer")
 	}
@@ -122,5 +137,5 @@ func loadConfig() (config, error) {
 		}
 		contextBudget = budget
 	}
-	return config{OrchestrationLimits: limits, New: fresh, Resume: resume, Profile: profile, ContextBudget: contextBudget, MaxToolSteps: maxToolSteps, MaxOutputTokens: maxOutputTokens, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
+	return config{AccentColor: accentColor, Plain: plain, NoStream: noStream, OrchestrationLimits: limits, New: fresh, Resume: resume, Profile: profile, ContextBudget: contextBudget, MaxToolSteps: maxToolSteps, MaxOutputTokens: maxOutputTokens, SkillsDir: strings.TrimSpace(os.Getenv("GARNESS_SKILLS_DIR"))}, nil
 }

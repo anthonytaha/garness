@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -37,6 +38,8 @@ func (b *approvalBroker) approve(ctx context.Context, name, args string) bool {
 }
 
 type runManager struct {
+	out     io.Writer
+	rich    bool
 	store   *orchestration.Store
 	current *orchestration.Coordinator
 	options orchestration.Options
@@ -76,13 +79,17 @@ func (m *runManager) status() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Run %s: %s\n", run.ID, run.State)
-	for _, task := range run.Tasks {
-		fmt.Printf("  %s: %s (%d/%d attempts)\n", task.Task.ID, task.State, len(task.Attempts), task.Task.MaxAttempts)
+	if m.rich {
+		fmt.Fprintln(m.output(), formatRun(run))
+		return nil
 	}
-	fmt.Printf("Requests: %d; reserved tokens: %d; reported tokens: %d; tool calls: %d\n", run.Usage.Requests, run.Usage.ReservedTokens, run.Usage.ReportedTokens, run.Usage.ToolCalls)
+	fmt.Fprintf(m.output(), "Run %s: %s\n", run.ID, run.State)
+	for _, task := range run.Tasks {
+		fmt.Fprintf(m.output(), "  %s: %s (%d/%d attempts)\n", task.Task.ID, task.State, len(task.Attempts), task.Task.MaxAttempts)
+	}
+	fmt.Fprintf(m.output(), "Requests: %d; reserved tokens: %d; reported tokens: %d; tool calls: %d\n", run.Usage.Requests, run.Usage.ReservedTokens, run.Usage.ReportedTokens, run.Usage.ToolCalls)
 	if run.Failure != nil {
-		fmt.Println(run.Failure)
+		fmt.Fprintln(m.output(), run.Failure)
 	}
 	return nil
 }
@@ -91,8 +98,12 @@ func (m *runManager) printPlan() {
 	if m.current == nil || m.current.Run.Plan == nil {
 		return
 	}
+	if m.rich {
+		fmt.Fprintln(m.output(), formatPlan(m.current.Run))
+		return
+	}
 	data, _ := json.MarshalIndent(m.current.Run.Plan, "", "  ")
-	fmt.Printf("Run: %s\n%s\nPlan digest: %s\nApprove with :approve <digest>; execute with :execute.\n", m.current.Run.ID, data, m.current.Run.Plan.Digest())
+	fmt.Fprintf(m.output(), "Run: %s\n%s\nPlan digest: %s\nApprove with :approve <digest>; execute with :execute.\n", m.current.Run.ID, data, m.current.Run.Plan.Digest())
 }
 
 // command performs idle-only mutations or returns an operation to execute in
@@ -139,7 +150,7 @@ func (m *runManager) command(line string) (bool, func(context.Context) (string, 
 			return true, nil, err
 		}
 		for _, run := range runs {
-			fmt.Println(run.ID, run.State, run.Objective)
+			fmt.Fprintln(m.output(), run.ID, run.State, run.Objective)
 		}
 		return true, nil, nil
 	case ":run-resume":
@@ -181,11 +192,11 @@ func (m *runManager) command(line string) (bool, func(context.Context) (string, 
 				if err != nil {
 					return true, nil, err
 				}
-				fmt.Println("Attempt:", attempt.ID, attempt.State, attempt.Failure)
-				fmt.Println(review)
+				fmt.Fprintln(m.output(), "Attempt:", attempt.ID, attempt.State, attempt.Failure)
+				fmt.Fprintln(m.output(), review)
 				data, err := json.MarshalIndent(artifact.Session.Transcript, "", "  ")
 				if err == nil {
-					fmt.Println(string(data))
+					fmt.Fprintln(m.output(), string(data))
 				}
 				return true, nil, err
 			}
@@ -197,7 +208,7 @@ func (m *runManager) command(line string) (bool, func(context.Context) (string, 
 		}
 		text, err := m.current.Changes()
 		if err == nil {
-			fmt.Println(text)
+			fmt.Fprintln(m.output(), text)
 		}
 		return true, nil, err
 	case ":apply":
@@ -217,4 +228,11 @@ func (m *runManager) command(line string) (bool, func(context.Context) (string, 
 		return true, nil, m.current.ReconcileApply()
 	}
 	return false, nil, nil
+}
+
+func (m *runManager) output() io.Writer {
+	if m.out != nil {
+		return m.out
+	}
+	return os.Stdout
 }

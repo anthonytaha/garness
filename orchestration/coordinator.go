@@ -24,6 +24,7 @@ type Options struct {
 	Policy       sandbox.SandboxPolicy
 	Approve      func(context.Context, string, string) bool
 	OnEvent      func(Event)
+	OnAgentEvent func(string, harness.Event)
 	Runner       sandbox.CommandRunner
 }
 
@@ -261,7 +262,7 @@ func (c *Coordinator) Plan(ctx context.Context) error {
 		return err
 	}
 	defer box.Close()
-	a := c.agent(ctx, box, []string{"read_file", "calculator"}, nil)
+	a := c.agent(ctx, box, []string{"read_file", "calculator"}, nil, "planner")
 	version := 1
 	if c.Run.Plan != nil {
 		version = c.Run.Plan.Version + 1

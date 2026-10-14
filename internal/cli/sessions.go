@@ -6,12 +6,17 @@ import (
 	"anthonytaha/garness/session"
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 )
 
 func printSessions(store *session.Store) error {
+	return printSessionsTo(os.Stdout, store)
+}
+
+func printSessionsTo(out io.Writer, store *session.Store) error {
 	list, e := store.List()
 	if e != nil {
 		return e
@@ -28,7 +33,7 @@ func printSessions(store *session.Store) error {
 		if len(preview) > 70 {
 			preview = preview[:70]
 		}
-		fmt.Printf("%d. %s  %s  %s  %s\n", i+1, v.ID, v.Name, v.Updated.Local().Format("2006-01-02 15:04"), preview)
+		fmt.Fprintf(out, "%d. %s  %s  %s  %s\n", i+1, v.ID, v.Name, v.Updated.Local().Format("2006-01-02 15:04"), preview)
 	}
 	return nil
 }
@@ -76,6 +81,10 @@ func sessionCommand(store *session.Store, args []string) int {
 	return 0
 }
 func manage(store *session.Store, args []string) error {
+	return manageTo(os.Stdout, store, args)
+}
+
+func manageTo(out io.Writer, store *session.Store, args []string) error {
 	if len(args) == 0 || args[0] != "sessions" {
 		return fmt.Errorf("usage: garness sessions list|inspect|rename|delete|export|branch")
 	}
@@ -84,7 +93,7 @@ func manage(store *session.Store, args []string) error {
 	}
 	op := args[1]
 	if op == "list" {
-		return printSessions(store)
+		return printSessionsTo(out, store)
 	}
 	if len(args) < 3 {
 		return fmt.Errorf("missing session ID")
@@ -99,7 +108,7 @@ func manage(store *session.Store, args []string) error {
 	}
 	switch op {
 	case "inspect":
-		fmt.Printf("%s (%s)\nWorkspace: %s\nCreated: %s\nUpdated: %s\nParent: %s\nMessages: %d; transcript: %d; interrupted: %t\n", v.Name, v.ID, v.Workspace, v.Created, v.Updated, v.Parent, len(v.Messages), len(v.Transcript), v.Interrupted)
+		fmt.Fprintf(out, "%s (%s)\nWorkspace: %s\nCreated: %s\nUpdated: %s\nParent: %s\nMessages: %d; transcript: %d; interrupted: %t\n", v.Name, v.ID, v.Workspace, v.Created, v.Updated, v.Parent, len(v.Messages), len(v.Transcript), v.Interrupted)
 		return nil
 	case "rename":
 		if len(args) < 4 {
@@ -128,7 +137,7 @@ func manage(store *session.Store, args []string) error {
 		}
 		defer unlock()
 		if e = store.Save(child); e == nil {
-			fmt.Println(child.ID)
+			fmt.Fprintln(out, child.ID)
 		}
 		return e
 	case "export":
@@ -152,13 +161,14 @@ func manage(store *session.Store, args []string) error {
 			}
 			return ce
 		}
-		fmt.Println(string(b))
+		fmt.Fprintln(out, string(b))
 		return nil
 	}
 	return fmt.Errorf("unknown session operation %q", op)
 }
 
 type sessionManager struct {
+	out     io.Writer
 	store   *session.Store
 	agent   *harness.Agent
 	box     *sandbox.Sandbox
@@ -180,7 +190,7 @@ func (m *sessionManager) save() error {
 			m.current = nil
 			return e
 		}
-		fmt.Println("Session:", m.current.ID)
+		m.println("Session:", m.current.ID)
 	}
 	m.agent.Snapshot(m.current)
 	return m.store.Save(m.current)
@@ -234,7 +244,7 @@ func (m *sessionManager) switchSession(v *session.Session) error {
 	m.agent.ConfigureSandbox(m.box)
 	if v != nil {
 		for _, w := range m.agent.Restore(v) {
-			fmt.Println("WARNING:", w)
+			m.println("WARNING:", w)
 		}
 		return m.save()
 	}
@@ -250,12 +260,12 @@ func (m *sessionManager) command(line string, scanner *bufio.Scanner) bool {
 	switch parts[0] {
 	case ":session":
 		if m.current == nil {
-			fmt.Println("New session (not saved yet)")
+			m.println("New session (not saved yet)")
 		} else {
-			fmt.Println(m.current.ID, m.current.Name)
+			m.println(m.current.ID, m.current.Name)
 		}
 	case ":sessions":
-		e = printSessions(m.store)
+		e = printSessionsTo(m.output(), m.store)
 	case ":new":
 		e = m.switchSession(nil)
 	case ":resume":
@@ -285,7 +295,7 @@ func (m *sessionManager) command(line string, scanner *bufio.Scanner) bool {
 		}
 	case ":export":
 		if e = m.save(); e == nil {
-			e = manage(m.store, append([]string{"sessions", "export", m.current.ID}, parts[1:]...))
+			e = manageTo(m.output(), m.store, append([]string{"sessions", "export", m.current.ID}, parts[1:]...))
 		}
 	case ":delete":
 		if len(parts) != 2 {
@@ -297,15 +307,24 @@ func (m *sessionManager) command(line string, scanner *bufio.Scanner) bool {
 		}
 	case ":inspect":
 		if m.current == nil {
-			fmt.Println("No saved session")
+			m.println("No saved session")
 		} else {
-			e = manage(m.store, []string{"sessions", "inspect", m.current.ID})
+			e = manageTo(m.output(), m.store, []string{"sessions", "inspect", m.current.ID})
 		}
 	default:
 		return false
 	}
 	if e != nil {
-		fmt.Println("error:", e)
+		m.println("error:", e)
 	}
 	return true
 }
+
+func (m *sessionManager) output() io.Writer {
+	if m.out != nil {
+		return m.out
+	}
+	return os.Stdout
+}
+
+func (m *sessionManager) println(values ...any) { fmt.Fprintln(m.output(), values...) }

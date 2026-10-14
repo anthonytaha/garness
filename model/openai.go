@@ -14,6 +14,7 @@ import (
 const DefaultMaxOutputTokens = 8192
 
 type CompleteOptions struct {
+	OnDelta              func(string)
 	Context              context.Context
 	BeforeRequest        func(int) error
 	OnUsage              func(map[string]any)
@@ -58,6 +59,10 @@ func completeOpenai(
 		"temperature": opts.Temperature,
 		"max_tokens":  opts.MaxTokens,
 	}
+	if opts.OnDelta != nil {
+		payload["stream"] = true
+		payload["stream_options"] = map[string]any{"include_usage": true}
+	}
 	if len(opts.Tools) > 0 {
 		payload["tools"] = options.Tools
 	}
@@ -99,6 +104,9 @@ func completeOpenai(
 	}
 
 	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return readCompletionStream(resp, opts)
+	}
 
 	var data struct {
 		Choices []struct {
@@ -144,6 +152,9 @@ func completeOpenai(
 	content := ""
 	if choice.Message.Content != nil {
 		content = *choice.Message.Content
+	}
+	if opts.OnDelta != nil && content != "" {
+		opts.OnDelta(content)
 	}
 
 	toolCalls := choice.Message.ToolCalls

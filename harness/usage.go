@@ -57,3 +57,7 @@ func (a *Agent) recordUsage(usage map[string]any, sent int) {
 	a.usageTokens, a.usageMsgCount = prompt, sent
 	a.usageSystem, _ = a.Messages[0]["content"].(string)
 }
+
+// EstimatedContextTokens returns the current context estimate. Read it only
+// while the agent is idle or from its execution goroutine.
+func (a *Agent) EstimatedContextTokens() int { return a.estimatedTokens() }

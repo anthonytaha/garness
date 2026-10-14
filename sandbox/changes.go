@@ -6,6 +6,9 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/pmezard/go-difflib/difflib"
 )
 
 type WorkspaceChange struct {
@@ -72,16 +75,45 @@ func changeReview(changes []WorkspaceChange, before, after map[string]snapshotFi
 	for _, change := range changes {
 		fmt.Fprintf(&result, "%s %q\nbefore: %s\nafter: %s\n", change.Kind, change.Path, change.Before, change.After)
 		old, new := before[change.Path], after[change.Path]
-		if len(old.Body)+len(new.Body) <= 32768 {
-			fmt.Fprintf(&result, "--- original\n%q\n+++ sandbox\n%q\n", old.Body, new.Body)
-		} else {
+		if old.Mode.IsDir() || new.Mode.IsDir() {
+			fmt.Fprintf(&result, "directory: %s\n", change.Kind)
+		} else if len(old.Body)+len(new.Body) > 32768 {
 			result.WriteString("content too large for inline review; inspect the sandbox file with read_file before applying\n")
+		} else if !utf8.Valid(old.Body) || !utf8.Valid(new.Body) || strings.ContainsRune(string(old.Body)+string(new.Body), '\x00') {
+			result.WriteString("binary content differs\n")
+		} else {
+			from, to := "original/"+change.Path, "sandbox/"+change.Path
+			if change.Kind == "added" {
+				from = "/dev/null"
+			}
+			if change.Kind == "deleted" {
+				to = "/dev/null"
+			}
+			diff, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: reviewLines(string(old.Body)), B: reviewLines(string(new.Body)), FromFile: from, ToFile: to, Context: 3})
+			result.WriteString(diff)
+			if diff == "" {
+				result.WriteString("file mode changed\n")
+			}
 		}
 	}
 	if len(changes) == 0 {
 		return "no changes"
 	}
 	return result.String()
+}
+
+// Preserve missing final newlines without merging adjacent diff lines. The
+// marker belongs to the final line, so hunk ranges still count actual lines.
+func reviewLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := strings.SplitAfter(text, "\n")
+	if lines[len(lines)-1] == "" {
+		return lines[:len(lines)-1]
+	}
+	lines[len(lines)-1] += "\n\\ No newline at end of file\n"
+	return lines
 }
 
 func (s *Sandbox) ApplyChanges() (string, error) {

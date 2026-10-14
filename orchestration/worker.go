@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 func inScope(path string, scope []string) bool {
@@ -49,12 +50,20 @@ func scopeChanges(state *sandbox.State, scope []string, policy sandbox.SandboxPo
 	return nil
 }
 
-func (c *Coordinator) agent(ctx context.Context, box *sandbox.Sandbox, allowed []string, scope []string) *harness.Agent {
+func (c *Coordinator) agent(ctx context.Context, box *sandbox.Sandbox, allowed []string, scope []string, observerID ...string) *harness.Agent {
 	root := c.Options.AgentsDir
 	if root == "" {
 		root = c.Store.Workspace
 	}
-	a := harness.NewAgent(c.Options.Model, c.Options.Provider, c.Options.SystemPrompt, root)
+	var observer func(harness.Event)
+	if c.Options.OnAgentEvent != nil {
+		id := "reviewer"
+		if len(observerID) > 0 {
+			id = observerID[0]
+		}
+		observer = func(event harness.Event) { c.Options.OnAgentEvent(id, event) }
+	}
+	a := harness.NewAgent(c.Options.Model, c.Options.Provider, c.Options.SystemPrompt, root, observer)
 	if len(c.Options.SkillsRoots) > 0 {
 		a.ConfigureSkills(c.Options.SkillsRoots...)
 	}
@@ -64,6 +73,12 @@ func (c *Coordinator) agent(ctx context.Context, box *sandbox.Sandbox, allowed [
 	a.MaxOutputTokens = c.budget.limits.MaxOutputTokens
 	a.RequireCompletion = true
 	a.OnUsage = c.budget.record
+	if c.Options.OnAgentEvent != nil {
+		a.OnRetry = func(status int, delay time.Duration) {
+			a.OnEvent(harness.Event{Kind: "retry", Text: fmt.Sprintf("HTTP %d; retrying in %s", status, delay.Round(time.Millisecond))})
+		}
+	}
+
 	var fatal error
 	a.BeforeRequest = func(tokens int) error {
 		if fatal != nil {
@@ -189,7 +204,7 @@ func (c *Coordinator) prepare(task *TaskRun) (*work, error) {
 func (c *Coordinator) perform(ctx context.Context, job *work, events chan<- outcome) outcome {
 	defer job.box.Close()
 	out := outcome{taskID: job.task.ID}
-	a := c.agent(ctx, job.box, job.task.AllowedTools, job.task.WriteScope)
+	a := c.agent(ctx, job.box, job.task.AllowedTools, job.task.WriteScope, job.task.ID)
 	a.Checkpoint = c.checkpoint(a, job.box, job.attempt.ID)
 	text, err := a.RunContext(ctx, job.prompt)
 	if err != nil {
@@ -346,7 +361,7 @@ func (c *Coordinator) review(ctx context.Context, source *sandbox.Sandbox, task 
 		return err
 	}
 	defer box.Close()
-	a := c.agent(ctx, box, []string{"read_file", "review_changes", "calculator"}, nil)
+	a := c.agent(ctx, box, []string{"read_file", "review_changes", "calculator"}, nil, task.ID+"/review")
 	a.Checkpoint = c.checkpoint(a, box, attemptID)
 	input, _ := json.Marshal(map[string]any{"task": task, "result": result, "attempt_id": attemptID})
 	prompt := "Review correctness against the acceptance criteria. Inspect actual files; use check evidence. Return only JSON {\"passed\":true,\"issues\":[]}. Input:\n" + string(input)

@@ -21,6 +21,8 @@ const MAX_TOOL_STEPS int = 32
 var ErrToolLimit = errors.New("agent tool limit reached")
 
 type Agent struct {
+	OnEvent              func(Event)
+	OnDelta              func(string)
 	BeforeRequest        func(int) error
 	OnUsage              func(map[string]any)
 	OnToolResult         func(string, tools.CallResult)
@@ -87,14 +89,17 @@ func (a *Agent) systemText() (string, error) {
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func NewAgent(modelName string, provider model.Provider, systemPrompt string, agentsDir string) *Agent {
+func NewAgent(modelName string, provider model.Provider, systemPrompt string, agentsDir string, observers ...func(Event)) *Agent {
 	if systemPrompt == "" {
 		systemPrompt = DEFAULT_SYS_PROMPT
 	}
 	agent := &Agent{SystemPrompt: systemPrompt, Model: modelName, Provider: provider, Messages: []map[string]any{}, AgentsDir: agentsDir, ContextBudget: DEFAULT_CONTEXT_BUDGET}
+	if len(observers) > 0 {
+		agent.OnEvent = observers[0]
+	}
 	sysPrompt, err := agent.systemText()
 	if err != nil {
-		fmt.Println("WARNING: Error loading system prompt: ", err)
+		agent.warning("Error loading system prompt: " + err.Error())
 		sysPrompt = systemPrompt
 	}
 	agent.SystemPrompt = sysPrompt
@@ -106,7 +111,7 @@ func NewAgent(modelName string, provider model.Provider, systemPrompt string, ag
 		root = "."
 	}
 	for _, warning := range agent.ConfigureSkills(filepath.Join(root, ".garness", "skills")) {
-		fmt.Println("WARNING:", warning)
+		agent.warning(warning.Error())
 	}
 	return agent
 }
@@ -169,6 +174,7 @@ func (a *Agent) RunContext(ctx context.Context, userText string) (reply string, 
 		tools[i] = s
 	}
 	options := &model.CompleteOptions{
+		OnDelta:              a.OnDelta,
 		Context:              ctx,
 		BeforeRequest:        a.BeforeRequest,
 		OnUsage:              a.OnUsage,
@@ -200,6 +206,8 @@ func (a *Agent) RunContext(ctx context.Context, userText string) (reply string, 
 			}
 		}
 		sent := len(a.Messages)
+		a.contextEvent()
+		a.emit(Event{Kind: "request", Text: "Requesting model response"})
 		resp, err := model.Chat(
 			a.Provider,
 			a.Messages,
@@ -209,6 +217,7 @@ func (a *Agent) RunContext(ctx context.Context, userText string) (reply string, 
 			return "", err
 		}
 		a.recordUsage(resp.Usage, sent)
+		a.contextEvent()
 		if resp.FinishReason != nil && *resp.FinishReason == "length" {
 			return "", fmt.Errorf("model output reached its token limit; increase --max-output-tokens or request smaller edits. No tools from the truncated response were executed")
 		}
@@ -239,13 +248,14 @@ func (a *Agent) maybeCompactContext(ctx context.Context) {
 	if a.ContextBudget <= 0 || a.estimatedTokens() <= a.ContextBudget {
 		return
 	}
+	a.emit(Event{Kind: "compaction", Text: "Compacting context"})
 	summaryModel := a.SummaryModel
 	if summaryModel == "" {
 		summaryModel = a.Model
 	}
 	compacted, err := compact(a.Provider, summaryModel, a.Messages, COMPACT_KEEP_HEAD, COMPACT_KEEP_TAIL, &model.CompleteOptions{Context: ctx, BeforeRequest: a.BeforeRequest, OnUsage: a.OnUsage, OnRetry: a.OnRetry, OnRateLimitRemaining: a.OnRateLimitRemaining})
 	if err != nil {
-		fmt.Println("WARNING: compaction failed: ", err)
+		a.warning("compaction failed: " + err.Error())
 		return
 	}
 	if len(compacted) != len(a.Messages) {
@@ -253,6 +263,8 @@ func (a *Agent) maybeCompactContext(ctx context.Context) {
 		a.usageSystem = ""
 	}
 	a.Messages = compacted
+	a.contextEvent()
+	a.emit(Event{Kind: "compacted", Text: "Context compaction finished"})
 }
 
 func (a *Agent) runToolCalls(resp *model.LLMResponse) error {
@@ -282,7 +294,10 @@ func (a *Agent) runToolCallsContext(ctx context.Context, resp *model.LLMResponse
 		name, _ := fn["name"].(string)
 		arguments, _ := fn["arguments"].(string)
 
+		a.emit(Event{Kind: "tool-start", ID: id, Name: name, Arguments: arguments})
+		started := time.Now()
 		result := a.Tools.CallContext(ctx, name, arguments)
+		a.emit(Event{Kind: "tool-finish", ID: id, Name: name, Arguments: arguments, Text: result.String(), Failed: result.Err != nil, Duration: time.Since(started)})
 		if a.OnToolResult != nil {
 			a.OnToolResult(name, result)
 		}

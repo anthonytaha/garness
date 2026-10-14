@@ -35,6 +35,18 @@ It currently featues:
 - Serialized approval prompts and coordinator-controlled final change review and approved copy-back
 - Orchestration CLI commands: :plan, :approve, :reject, :execute, :run-status, and :cancel
 - Run management CLI commands: :runs, :run-resume, :attempt, :retry, :reconcile-apply, and :run-close
+- Retro scrolling terminal interface with amber accents, native scrollback, and Markdown and code rendering
+- Configurable terminal accent with green as the default; --accent-color or GARNESS_ACCENT_COLOR accepts green, amber, blue, cyan, magenta, red, white, #RRGGBB, or a palette index from 0 to 255 (the flag overrides the environment)
+- Multiline input with Ctrl+J, bracketed paste handling, keyboard history, and searchable `:` command completion
+- Streaming model responses with complete tool-call assembly and interrupted-stream protection
+- Searchable keyboard session picker with conversation previews and recent transcript replay
+- Central plan review and keyboard actions with approvals bound to the displayed plan version and separate execution
+- Live parallel-agent progress with dependencies, attempt counts, verification states, run budgets, and task inspection
+- Compact tool activity with durations, outcomes, and expandable details through Ctrl+O and :tools
+- Scrollable default-deny approval cards that preserve input drafts and serialize worker approval requests
+- Unified change diffs with missing-newline markers and handling for binary files, large files, directories, and mode changes
+- Live model, workspace, sandbox, estimated context usage, and input queue status
+- Automatic plain interface for noninteractive and dumb terminals, --plain override, --no-stream compatibility option, and NO_COLOR support
 
 
 # Why?

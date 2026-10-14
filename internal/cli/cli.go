@@ -27,7 +27,13 @@ func Run() int {
 		return sessionCommand(store, flag.Args())
 	}
 	scanner := bufio.NewScanner(os.Stdin)
-	selected, err := chooseSession(store, scanner, config)
+	var selected *session.Session
+	interactive := !config.Plain && interactiveTerminal()
+	if interactive && !config.New && config.Resume == "" {
+		selected, err = chooseSessionInteractive(store)
+	} else {
+		selected, err = chooseSession(store, scanner, config)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -84,6 +90,13 @@ func Run() int {
 	defer manager.close()
 	defer func() { manager.box.Close() }()
 	agent.Checkpoint = manager.save
-	runREPL(scanner, agent, box, manager, config.OrchestrationLimits)
+	if interactive {
+		if err := runTerminal(manager, config.OrchestrationLimits, config.NoStream, config.AccentColor); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	} else {
+		runREPL(scanner, agent, box, manager, config.OrchestrationLimits)
+	}
 	return 0
 }
