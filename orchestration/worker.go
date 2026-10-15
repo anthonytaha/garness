@@ -143,10 +143,12 @@ func (c *Coordinator) checkpoint(a *harness.Agent, box *sandbox.Sandbox, attempt
 }
 
 type work struct {
-	task    Task
-	attempt Attempt
-	box     *sandbox.Sandbox
-	prompt  string
+	task        Task
+	attempt     Attempt
+	box         *sandbox.Sandbox
+	prompt      string
+	reportOnly  bool
+	savedReport string
 }
 
 type outcome struct {
@@ -161,16 +163,30 @@ type outcome struct {
 func (c *Coordinator) prepare(task *TaskRun) (*work, error) {
 	var box *sandbox.Sandbox
 	var err error
+	var savedReport string
+	var savedTranscript []map[string]any
+	reportOnly := false
 	if len(task.Attempts) > 0 {
 		last := task.Attempts[len(task.Attempts)-1]
 		// Preserve failed edits for a bounded repair. Conflicts and interrupted
 		// actions start from the latest accepted workspace after reconciliation.
-		if last.Failure != nil && last.Failure.Repairable && last.Failure.Kind != "conflict" && last.Result != nil {
+		reportOnly = last.Failure != nil && last.Failure.Kind == "format" && !last.Failure.Ambiguous
+		if reportOnly || last.Failure != nil && last.Failure.Repairable && last.Failure.Kind != "conflict" && last.Result != nil {
 			artifact, loadErr := c.Store.LoadArtifact(c.Run.ID, last.ID)
 			if loadErr != nil {
 				return nil, loadErr
 			}
 			box, err = sandbox.RestoreSandbox(c.box.Workspace.Root, c.Options.Policy, artifact.Sandbox)
+			if reportOnly {
+				savedTranscript = artifact.Session.Transcript
+				for _, message := range savedTranscript {
+					if message["role"] == "assistant" {
+						if content, ok := message["content"].(string); ok && content != "" {
+							savedReport = content
+						}
+					}
+				}
+			}
 		}
 	}
 	if box == nil && err == nil {
@@ -197,8 +213,12 @@ func (c *Coordinator) prepare(task *TaskRun) (*work, error) {
 		}
 	}
 	input, _ := json.Marshal(map[string]any{"objective": c.Run.Objective, "task": task.Task, "dependencies": dependencies, "feedback": task.Feedback})
-	prompt := "Perform only this approved task. You cannot delegate, expand permissions, apply changes, or mark the run complete. Return only JSON with summary (nonempty string), artifacts (workspace-relative file paths), and unresolved (array of strings). Report remaining work honestly. Input:\n" + string(input)
-	return &work{task: task.Task, attempt: attempt, box: box, prompt: prompt}, nil
+	prompt := "Perform only this approved task. You cannot delegate, expand permissions, apply changes, or mark the run complete. Return only JSON without Markdown fences, with summary (nonempty string), artifacts (workspace-relative file paths), and unresolved (array of strings). Report remaining work honestly. Input:\n" + string(input)
+	if reportOnly {
+		transcript, _ := json.Marshal(savedTranscript)
+		prompt = "Report only from the saved attempt below. Its sandbox files have been restored. Do not repeat any tools or implementation work. Return Result JSON with summary, artifacts, and unresolved. Approved task:\n" + string(input) + "\nSaved transcript:\n" + string(transcript)
+	}
+	return &work{task: task.Task, attempt: attempt, box: box, prompt: prompt, reportOnly: reportOnly, savedReport: savedReport}, nil
 }
 
 func (c *Coordinator) perform(ctx context.Context, job *work, events chan<- outcome) outcome {
@@ -206,7 +226,21 @@ func (c *Coordinator) perform(ctx context.Context, job *work, events chan<- outc
 	out := outcome{taskID: job.task.ID}
 	a := c.agent(ctx, job.box, job.task.AllowedTools, job.task.WriteScope, job.task.ID)
 	a.Checkpoint = c.checkpoint(a, job.box, job.attempt.ID)
-	text, err := a.RunContext(ctx, job.prompt)
+	text := job.savedReport
+	var err error
+	if job.reportOnly {
+		a.Tools.Restrict(nil)
+		a.ResponseFormat = resultResponseFormat()
+		message := map[string]any{"role": "user", "content": job.prompt}
+		a.Messages = append(a.Messages, message)
+		a.Transcript = append(a.Transcript, message)
+		if err = a.Checkpoint(); err != nil {
+			out.err = err
+			return out
+		}
+	} else {
+		text, err = a.RunContext(ctx, job.prompt)
+	}
 	if err != nil {
 		out.err = err
 		return out
@@ -235,6 +269,7 @@ func (c *Coordinator) perform(ctx context.Context, job *work, events chan<- outc
 		}
 		// Format corrections cannot execute further tools.
 		a.Tools.Restrict(nil)
+		a.ResponseFormat = resultResponseFormat()
 		text, err = a.RunContext(ctx, "Correct the final Result JSON only: "+err.Error())
 		if err != nil {
 			out.err = err
@@ -243,6 +278,17 @@ func (c *Coordinator) perform(ctx context.Context, job *work, events chan<- outc
 	}
 	out.result = result
 	result.Checks = nil
+	if job.reportOnly {
+		data, _ := json.Marshal(result)
+		message := map[string]any{"role": "assistant", "content": string(data)}
+		a.Messages = append(a.Messages, message)
+		a.Transcript = append(a.Transcript, message)
+		a.Interrupted = false
+		if err = a.Checkpoint(); err != nil {
+			out.err = err
+			return out
+		}
+	}
 	out.state, err = job.box.ExportState()
 	if err != nil {
 		out.err = err
@@ -375,6 +421,8 @@ func (c *Coordinator) review(ctx context.Context, source *sandbox.Sandbox, task 
 			Issues []string `json:"issues"`
 		}
 		if err = decode(text, &decision); err != nil {
+			a.Tools.Restrict(nil)
+			a.ResponseFormat = reviewResponseFormat()
 			prompt = "Correct the review JSON only: " + err.Error()
 			continue
 		}

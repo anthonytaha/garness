@@ -270,17 +270,22 @@ func TestTerminalOrchestrationFlow(t *testing.T) {
 			Messages []map[string]any `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		planning := false
+		planning, inspecting := false, false
 		for _, message := range body.Messages {
 			text, _ := message["content"].(string)
 			if strings.Contains(text, "Plan this objective:") {
 				planning = true
+			}
+			if strings.Contains(text, "Inspect workspace context for planning:") {
+				inspecting = true
 			}
 		}
 		message := map[string]any{}
 		if planning {
 			data, _ := json.Marshal(plan)
 			message["content"] = string(data)
+		} else if inspecting {
+			message["content"] = "No relevant existing implementation; create the requested file."
 		} else if body.Messages[len(body.Messages)-1]["role"] == "tool" {
 			message["content"] = `{"summary":"done","artifacts":["file"],"unresolved":[]}`
 		} else {

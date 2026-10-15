@@ -20,7 +20,7 @@ type jobResult struct {
 
 func runREPL(scanner *bufio.Scanner, agent *harness.Agent, box *sandbox.Sandbox, manager *sessionManager, limits orchestration.Limits) {
 	fmt.Println("Welcome to Garness:")
-	fmt.Println("Orchestration: :plan <objective>, :approve <digest>, :execute, :run-status, :cancel, :runs, :run-resume <id>, :attempt <task>, :retry <task> <evidence>, :reconcile-apply, :run-close")
+	fmt.Println("Orchestration: :plan <objective>, :approve <digest>, :execute, :run-status, :cancel, :runs, :run-resume <id>, :attempt <task>, :retry <task> [evidence], :reconcile-apply, :run-close")
 	broker := &approvalBroker{requests: make(chan approvalRequest)}
 	events := make(chan orchestration.Event, 256)
 	runs, err := newRunManager(manager, agent, limits, broker, events)

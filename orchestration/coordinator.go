@@ -195,6 +195,15 @@ func (c *Coordinator) taskTransition(task *TaskRun, to State, detail string) err
 }
 
 func decode(text string, out any) error {
+	text = strings.TrimSpace(text)
+	// Accept one enclosing JSON code fence, never prose or a guessed substring.
+	// The contents still undergo strict JSON decoding and local validation.
+	if strings.HasPrefix(text, "```json\n") || strings.HasPrefix(text, "```\n") || strings.HasPrefix(text, "```json\r\n") || strings.HasPrefix(text, "```\r\n") {
+		if strings.HasSuffix(text, "\n```") {
+			_, text, _ = strings.Cut(text, "\n")
+			text = strings.TrimSpace(strings.TrimSuffix(text, "\n```"))
+		}
+	}
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
@@ -267,22 +276,34 @@ func (c *Coordinator) Plan(ctx context.Context) error {
 	if c.Run.Plan != nil {
 		version = c.Run.Plan.Version + 1
 	}
-	limits, _ := json.Marshal(c.Options.Limits)
-	example := `{"version":1,"tasks":[{"id":"implement","role":"worker","instructions":"Implement the requested change","dependencies":[],"allowed_tools":["read_file","write_file","edit_file","shell"],"write_scope":["src"],"acceptance_criteria":["Requested behavior works"],"checks":[{"kind":"shell","command":"go test ./..."}],"max_attempts":3,"review":true}],"final_checks":[{"kind":"shell","command":"go test ./...","task_id":"implement"}],"limits":{}}`
-	prompt := fmt.Sprintf("Plan this objective: %s\nInspect files with read_file as needed. Return only a JSON Plan, without markdown. Example shape: %s\nUse version %d and these exact limits: %s. Use real repository paths and relevant checks. Each task needs concrete checks, dependencies, explicit tool permissions and write scopes. Allowed tools: calculator, read_file, write_file, edit_file, append_file, shell, review_changes, load_skill, read_skill_resource. Reviewers are read-only. Checks are file_exists, file_contains (contains text), or shell (command and optional exact domains). Final checks must name a task_id to repair. At most 64 tasks; at most 3 attempts per task. No recursive delegation.", c.Run.Objective, example, version, limits)
 	var paths []string
 	for path := range c.Run.Working.Files {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	manifest, _ := json.Marshal(paths)
-	prompt += "\nWorkspace paths: " + string(manifest)
+	prompt := plannerPrompt(c.Run.Objective, version, c.Options.Limits, paths)
 	attemptID := c.Store.NewID()
 	c.Run.PlannerAttempts = append(c.Run.PlannerAttempts, attemptID)
 	if err := c.save(); err != nil {
 		return err
 	}
 	a.Checkpoint = c.checkpoint(a, box, attemptID)
+	// Inspect with read-only tools first, then generate the plan without tools.
+	// Mixing a full response schema with tool selection can make providers
+	// repeatedly generate a plan and request another unrelated file read.
+	a.MaxToolSteps = min(4, c.budget.limits.MaxToolSteps)
+	a.MaxOutputTokens = min(1024, c.budget.limits.MaxOutputTokens)
+	a.RequireCompletion = false
+	manifest, _ := json.Marshal(paths)
+	inspection := fmt.Sprintf("Inspect workspace context for planning: %s\nWorkspace paths: %s\nUse read_file only if relevant existing implementation or conventions must be understood. For a new self-contained artifact, use the manifest and finish directly; do not inspect unrelated code or the agent/tool implementation. Do not implement anything or produce a plan yet. Return a brief context summary of at most 150 words. Inspection is limited to four tool rounds.", c.Run.Objective, manifest)
+	if _, err := a.RunContext(ctx, inspection); err != nil {
+		return c.stop(err)
+	}
+	a.Tools.Restrict(nil)
+	a.MaxToolSteps = c.budget.limits.MaxToolSteps
+	a.MaxOutputTokens = c.budget.limits.MaxOutputTokens
+	a.RequireCompletion = true
+	a.ResponseFormat = planResponseFormat(version, c.Options.Limits)
 	for correction := 0; correction < 3; correction++ {
 		text, runErr := a.RunContext(ctx, prompt)
 		if runErr != nil {
@@ -294,14 +315,22 @@ func (c *Coordinator) Plan(ctx context.Context) error {
 			err = fmt.Errorf("expected version %d", version)
 		}
 		if err == nil {
-			err = c.SetPlan(plan)
+			if plan.Limits != c.Options.Limits {
+				err = fmt.Errorf("plan must use configured limits")
+			} else {
+				err = plan.Validate()
+			}
 		}
 		if err == nil {
-			return nil
+			return c.SetPlan(plan)
 		}
-		prompt = "Correct your Plan JSON. Validation error: " + err.Error() + ". Return only the complete corrected JSON."
+		c.event("", attemptID, Planning, Planning, fmt.Sprintf("planner response %d rejected: %s", correction+1, err))
+		if saveErr := c.save(); saveErr != nil {
+			return saveErr
+		}
+		prompt = "Correct your Plan JSON. Validation error: " + err.Error() + ". Return the smallest complete corrected plan using the exact schema, hyphenated task IDs, string write_scope paths, and configured limits."
 	}
-	return c.stop(&Failure{Kind: "format", Message: "planner did not produce a valid plan after three responses"})
+	return c.stop(&Failure{Kind: "format", Message: fmt.Sprintf("planner did not produce a valid plan after three responses; last validation error: %s", err)})
 }
 
 func (c *Coordinator) ApprovePlan(digest string, approved bool) error {
@@ -368,8 +397,8 @@ func classify(err error) *Failure {
 }
 
 func (c *Coordinator) Retry(taskID, evidence string) error {
-	if c.Run.State != Blocked {
-		return fmt.Errorf("retry requires a blocked run")
+	if c.Run.State != Blocked && c.Run.State != Failed {
+		return fmt.Errorf("retry requires a blocked run or a failed result report")
 	}
 	if c.Run.Plan == nil || c.Run.Approval == nil || !c.Run.Approval.Approved || c.Run.Approval.Digest != c.Run.Plan.Digest() {
 		return fmt.Errorf("retry requires an approved plan")
@@ -379,16 +408,37 @@ func (c *Coordinator) Retry(taskID, evidence string) error {
 		if task.Task.ID != taskID {
 			continue
 		}
-		if task.State != Blocked {
+		formatOnly := false
+		if len(task.Attempts) > 0 {
+			last := task.Attempts[len(task.Attempts)-1]
+			formatOnly = last.Failure != nil && last.Failure.Kind == "format" && !last.Failure.Ambiguous
+		}
+		if task.State != Blocked && !(task.State == Failed && formatOnly) {
 			return fmt.Errorf("task is not blocked")
+		}
+		if c.Run.State == Failed && !formatOnly {
+			return fmt.Errorf("failed execution cannot be retried as a result report")
 		}
 		if len(task.Attempts) >= task.Task.MaxAttempts {
 			return fmt.Errorf("attempt limit exhausted; create a new run")
 		}
-		if strings.TrimSpace(evidence) == "" {
+		if !formatOnly && strings.TrimSpace(evidence) == "" {
 			return fmt.Errorf("provide reconciliation evidence before retrying")
 		}
-		task.Feedback = "User reconciled the previous attempt: " + evidence
+		if formatOnly {
+			// Check that the artifact is available before changing terminal state.
+			if _, err := c.Store.LoadArtifact(c.Run.ID, task.Attempts[len(task.Attempts)-1].ID); err != nil {
+				return err
+			}
+			task.Feedback = "Retry result reporting and verification from saved files only; do not repeat completed tool actions."
+		} else {
+			task.Feedback = "User reconciled the previous attempt: " + evidence
+		}
+		if c.Run.State == Failed {
+			if err := c.transition(Blocked, "result reporting retry requested"); err != nil {
+				return err
+			}
+		}
 		if err := c.taskTransition(task, Pending, task.Feedback); err != nil {
 			return err
 		}

@@ -23,7 +23,7 @@ var commands = []commandInfo{
 	{":runs", "", "List saved orchestration runs"},
 	{":run-resume", "<id>", "Restore an orchestration run"},
 	{":attempt", "<task>", "Inspect a task's saved transcript and changes"},
-	{":retry", "<task> <evidence>", "Reconcile and retry a blocked task"},
+	{":retry", "<task> [evidence]", "Retry result reporting or reconcile a blocked task"},
 	{":reconcile-apply", "", "Reconcile interrupted copy-back"},
 	{":run-close", "", "Close the selected run"},
 	{":session", "", "Show the active session"},

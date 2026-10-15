@@ -59,7 +59,7 @@ func TestOrchestrationCLIFlow(t *testing.T) {
 			Messages []map[string]any `json:"messages"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		planning, worker := false, false
+		planning, worker, inspecting := false, false, false
 		for _, m := range body.Messages {
 			text, _ := m["content"].(string)
 			if strings.Contains(text, "Plan this objective:") {
@@ -68,11 +68,16 @@ func TestOrchestrationCLIFlow(t *testing.T) {
 			if strings.Contains(text, "Perform only this approved task") {
 				worker = true
 			}
+			if strings.Contains(text, "Inspect workspace context for planning:") {
+				inspecting = true
+			}
 		}
 		message := map[string]any{}
 		if planning {
 			data, _ := json.Marshal(plan)
 			message["content"] = string(data)
+		} else if inspecting {
+			message["content"] = "Create the requested file; no existing implementation."
 		} else if !worker {
 			ordinary.Add(1)
 			message["content"] = "ordinary reply"

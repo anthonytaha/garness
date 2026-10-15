@@ -168,8 +168,8 @@ func (m *runManager) command(line string) (bool, func(context.Context) (string, 
 		m.current = c
 		return true, nil, m.status()
 	case ":retry":
-		if m.current == nil || len(parts) < 3 {
-			return true, nil, fmt.Errorf("usage: :retry <task> <reconciliation evidence>")
+		if m.current == nil || len(parts) < 2 {
+			return true, nil, fmt.Errorf("usage: :retry <task> [reconciliation evidence]")
 		}
 		return true, nil, m.current.Retry(parts[1], strings.Join(parts[2:], " "))
 	case ":attempt":

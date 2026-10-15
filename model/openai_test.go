@@ -6,10 +6,31 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCompletionResponseFormat(t *testing.T) {
+	for _, format := range []map[string]any{nil, {"type": "json_schema", "json_schema": map[string]any{"name": "fixture", "strict": true, "schema": map[string]any{"type": "object"}}}} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			if actual, ok := payload["response_format"]; format == nil && ok || format != nil && !reflect.DeepEqual(actual, format) {
+				t.Error("response format not preserved", actual)
+			}
+			io.WriteString(w, `{"choices":[{"message":{"content":"{}"}}]}`)
+		}))
+		_, err := Chat(Provider{BaseUrl: server.URL}, nil, &CompleteOptions{ResponseFormat: format})
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestCompletionRetries(t *testing.T) {
 	for _, test := range []struct {

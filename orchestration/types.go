@@ -292,7 +292,7 @@ var runTransitions = map[State][]State{
 	Executing:        {Verifying, Blocked, Failed, Cancelled},
 	Verifying:        {Executing, Completed, Blocked, Failed, Cancelled},
 	Blocked:          {Planning, AwaitingApproval, Executing, Cancelled},
-	Failed:           {Planning, Cancelled},
+	Failed:           {Planning, Cancelled, Blocked},
 	Cancelled:        {Planning, Blocked},
 }
 
@@ -304,6 +304,7 @@ var taskTransitions = map[State][]State{
 	RetryWait: {Ready, Pending, Failed, Blocked, Cancelled},
 	Blocked:   {Pending, Ready, Cancelled},
 	Succeeded: {Pending, RetryWait},
+	Failed:    {Pending},
 }
 
 func validTransition(table map[State][]State, from, to State) bool {

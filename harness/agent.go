@@ -21,6 +21,7 @@ const MAX_TOOL_STEPS int = 32
 var ErrToolLimit = errors.New("agent tool limit reached")
 
 type Agent struct {
+	ResponseFormat       map[string]any
 	OnEvent              func(Event)
 	OnDelta              func(string)
 	BeforeRequest        func(int) error
@@ -174,6 +175,7 @@ func (a *Agent) RunContext(ctx context.Context, userText string) (reply string, 
 		tools[i] = s
 	}
 	options := &model.CompleteOptions{
+		ResponseFormat:       a.ResponseFormat,
 		OnDelta:              a.OnDelta,
 		Context:              ctx,
 		BeforeRequest:        a.BeforeRequest,

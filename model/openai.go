@@ -14,6 +14,7 @@ import (
 const DefaultMaxOutputTokens = 8192
 
 type CompleteOptions struct {
+	ResponseFormat       map[string]any
 	OnDelta              func(string)
 	Context              context.Context
 	BeforeRequest        func(int) error
@@ -58,6 +59,9 @@ func completeOpenai(
 		"messages":    messages,
 		"temperature": opts.Temperature,
 		"max_tokens":  opts.MaxTokens,
+	}
+	if opts.ResponseFormat != nil {
+		payload["response_format"] = opts.ResponseFormat
 	}
 	if opts.OnDelta != nil {
 		payload["stream"] = true

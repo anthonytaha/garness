@@ -503,6 +503,10 @@ func TestPlannerCorrectionsAndReviewer(t *testing.T) {
 	plan.Tasks[0].Review = true
 	c := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 		messages, text := payload(t, r)
+		if !strings.Contains(text, "Plan this objective:") && strings.Contains(text, "Inspect workspace context for planning:") {
+			response(w, "No relevant existing implementation; create the requested file.")
+			return
+		}
 		if strings.Contains(text, "Plan this objective:") {
 			if planning.Add(1) == 1 {
 				response(w, `{"version":1}`)
